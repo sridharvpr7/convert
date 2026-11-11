@@ -13,6 +13,8 @@ import { useAppStore } from '@/store/app.store';
 import { getToolDispatch, hasProcessor, type OptionField } from '@/lib/toolDispatch';
 import type { ProcessorResult } from '@/lib/processors';
 import { recordHistory } from '@/lib/history';
+import { DownloadCenter } from '@/components/tools/DownloadCenter';
+import { apiClient } from '@/lib/api';
 
 // ────────────────────────────────────────────────
 // Processing states
@@ -32,7 +34,27 @@ interface ProcessingFile {
   error?: string;
   result?: ProcessorResult;
   results?: ProcessorResult[];
+  durationMs?: number;
+  completedAt?: Date;
+  jobId?: string;
 }
+
+const TOOL_PRESETS: Record<string, { label: string; desc: string; values: Record<string, unknown> }[]> = {
+  'image-compressor': [
+    { label: 'Web Optimal', desc: 'Balanced 75% quality', values: { quality: 0.75, maxWidth: 1920 } },
+    { label: 'Max Compression', desc: '55% quality, smaller size', values: { quality: 0.55, maxWidth: 1280 } },
+    { label: 'Lossless / Crisp', desc: '90% quality, maximum detail', values: { quality: 0.90, maxWidth: 3840 } },
+  ],
+  'compress-pdf': [
+    { label: 'Medium (Balanced)', desc: 'Standard compression', values: { level: 'medium' } },
+    { label: 'High (Smallest)', desc: 'Maximum compression', values: { level: 'high' } },
+    { label: 'Low (Crisp Text)', desc: 'Minimal compression', values: { level: 'low' } },
+  ],
+  'split-pdf': [
+    { label: 'All Pages', desc: 'Split each page individually', values: { mode: 'each' } },
+    { label: 'Page Range', desc: 'Extract custom page ranges', values: { mode: 'range' } },
+  ],
+};
 
 // ────────────────────────────────────────────────
 // Utility: download a blob
@@ -810,23 +832,57 @@ export const ToolPage: React.FC = () => {
     if (dispatch.multiFile) {
       const fileList = inputFiles.map((pf) => pf.file);
       setFiles((prev) => prev.map((f, i) => i === 0 ? { ...f, state: 'processing', progress: 50 } : f));
+      const startTime = Date.now();
+
+      // Notify backend & Telegram that conversion started
+      const totalSize = fileList.reduce((acc, f) => acc + f.size, 0);
+      let startedJob: { id: string } | null = null;
+      try {
+        startedJob = await apiClient.startJob({
+          toolSlug: tool!.slug,
+          toolName: tool!.name,
+          inputFileName: fileList.map((f) => f.name).join(', '),
+          inputFileSize: totalSize,
+          inputFormat: tool!.supportedInputFormats?.[0] || 'file',
+        });
+      } catch {
+        /* ignore telemetry error */
+      }
+
       try {
         const result = await dispatch.processor(fileList, mergedOpts);
         const results = Array.isArray(result) ? result : [result];
+        const durationMs = Date.now() - startTime;
+        const completedAt = new Date();
+
         setFiles((prev) => prev.map((f, i) => i === 0 ? {
           ...f,
           state: 'completed',
           progress: 100,
           result: results[0],
           results: results.length > 1 ? results : undefined,
-        } : { ...f, state: 'completed', progress: 100 }));
+          durationMs,
+          completedAt,
+          jobId: startedJob?.id,
+        } : { ...f, state: 'completed', progress: 100, durationMs, completedAt, jobId: startedJob?.id }));
+
+        // Notify backend & Telegram that conversion completed
+        if (startedJob?.id && results[0]) {
+          apiClient.completeJob({
+            id: startedJob.id,
+            outputFileName: results[0].filename,
+            outputFileSize: results[0].blob.size,
+            outputFormat: results[0].filename.split('.').pop() || '',
+            durationMs,
+          }).catch(() => {});
+        }
 
         recordHistory({
           fileName: fileList.map((f) => f.name).join(', '),
           toolName: tool!.name,
           toolSlug: tool!.slug,
           category: tool!.category,
-          size: (fileList.reduce((acc, f) => acc + f.size, 0) / (1024 * 1024)).toFixed(2) + ' MB',
+          size: (totalSize / (1024 * 1024)).toFixed(2) + ' MB',
           resultSize: results[0]?.meta?.outputSize
             ? ((results[0].meta.outputSize as number) / (1024 * 1024)).toFixed(2) + ' MB'
             : undefined,
@@ -840,13 +896,23 @@ export const ToolPage: React.FC = () => {
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unknown error';
-        setFiles((prev) => prev.map((f) => ({ ...f, state: 'failed', error: msg })));
+        const durationMs = Date.now() - startTime;
+
+        if (startedJob?.id) {
+          apiClient.failJob({
+            id: startedJob.id,
+            durationMs,
+            errorSummary: msg,
+          }).catch(() => {});
+        }
+
+        setFiles((prev) => prev.map((f) => ({ ...f, state: 'failed', error: msg, durationMs })));
         recordHistory({
           fileName: fileList.map((f) => f.name).join(', '),
           toolName: tool!.name,
           toolSlug: tool!.slug,
           category: tool!.category,
-          size: (fileList.reduce((acc, f) => acc + f.size, 0) / (1024 * 1024)).toFixed(2) + ' MB',
+          size: (totalSize / (1024 * 1024)).toFixed(2) + ' MB',
           status: 'failed',
           processingType: tool!.processingMode === 'local' ? 'local' : 'cloud',
         });
@@ -859,6 +925,21 @@ export const ToolPage: React.FC = () => {
     } else {
       for (const pf of inputFiles) {
         setFiles((prev) => prev.map((f) => f.id === pf.id ? { ...f, state: 'processing', progress: 10 } : f));
+        const startTime = Date.now();
+
+        let startedJob: { id: string } | null = null;
+        try {
+          startedJob = await apiClient.startJob({
+            toolSlug: tool!.slug,
+            toolName: tool!.name,
+            inputFileName: pf.file.name,
+            inputFileSize: pf.file.size,
+            inputFormat: pf.file.name.split('.').pop() || '',
+          });
+        } catch {
+          /* ignore */
+        }
+
         try {
           const progressInterval = setInterval(() => {
             setFiles((prev) => prev.map((f) => {
@@ -872,14 +953,30 @@ export const ToolPage: React.FC = () => {
           const result = await dispatch.processor([pf.file], mergedOpts);
           clearInterval(progressInterval);
 
+          const durationMs = Date.now() - startTime;
+          const completedAt = new Date();
           const results = Array.isArray(result) ? result : null;
           const primaryRes = Array.isArray(result) ? result[0] : result;
+
+          if (startedJob?.id && primaryRes) {
+            apiClient.completeJob({
+              id: startedJob.id,
+              outputFileName: primaryRes.filename,
+              outputFileSize: primaryRes.blob.size,
+              outputFormat: primaryRes.filename.split('.').pop() || '',
+              durationMs,
+            }).catch(() => {});
+          }
+
           setFiles((prev) => prev.map((f) => f.id === pf.id ? {
             ...f,
             state: 'completed',
             progress: 100,
             result: primaryRes,
             results: results && results.length > 1 ? results : undefined,
+            durationMs,
+            completedAt,
+            jobId: startedJob?.id,
           } : f));
 
           recordHistory({
@@ -901,8 +998,18 @@ export const ToolPage: React.FC = () => {
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Processing failed';
+          const durationMs = Date.now() - startTime;
+
+          if (startedJob?.id) {
+            apiClient.failJob({
+              id: startedJob.id,
+              durationMs,
+              errorSummary: msg,
+            }).catch(() => {});
+          }
+
           setFiles((prev) => prev.map((f) => f.id === pf.id ? {
-            ...f, state: 'failed', error: msg, progress: 0,
+            ...f, state: 'failed', error: msg, progress: 0, durationMs,
           } : f));
           recordHistory({
             fileName: pf.file.name,
@@ -968,17 +1075,6 @@ export const ToolPage: React.FC = () => {
     setOverallState('idle');
     setActiveTab('upload');
     setSignatureDataUrl('');
-  };
-
-  const handleDownloadAll = () => {
-    const completed = files.filter((f) => f.state === 'completed' && f.result);
-    for (const pf of completed) {
-      if (pf.results && pf.results.length > 1) {
-        pf.results.forEach((r) => downloadBlob(r.blob, r.filename));
-      } else if (pf.result) {
-        downloadBlob(pf.result.blob, pf.result.filename);
-      }
-    }
   };
 
   const setOption = (key: string, value: unknown) => setOptions((prev) => ({ ...prev, [key]: value }));
@@ -1447,6 +1543,31 @@ export const ToolPage: React.FC = () => {
                   </button>
                 </div>
 
+                {/* Conversion Presets */}
+                {TOOL_PRESETS[tool.slug] && (
+                  <div className="mb-6 p-4 rounded-xl border bg-hover-cv/40" style={{ borderColor: 'var(--border)' }}>
+                    <p className="text-2xs font-semibold uppercase tracking-wider text-muted-cv mb-2.5">
+                      Quick Presets
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {TOOL_PRESETS[tool.slug].map((pr) => (
+                        <button
+                          key={pr.label}
+                          type="button"
+                          onClick={() => {
+                            setOptions((prev) => ({ ...prev, ...pr.values }));
+                          }}
+                          className="p-2.5 rounded-lg border text-left transition-all hover:border-accent hover:bg-card"
+                          style={{ borderColor: 'var(--border)', backgroundColor: 'var(--card)' }}
+                        >
+                          <p className="text-xs font-semibold text-primary">{pr.label}</p>
+                          <p className="text-2xs text-muted-cv mt-0.5">{pr.desc}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {dispatch?.optionFields && dispatch.optionFields.length > 0 ? (
                   <OptionsPanel
                     fields={dispatch.optionFields}
@@ -1560,64 +1681,47 @@ export const ToolPage: React.FC = () => {
                     <div className="w-full max-w-md progress-bar">
                       <div className="progress-fill" style={{ width: '65%', backgroundColor: meta.color }} />
                     </div>
-                    <p className="text-2xs text-muted-cv">Please keep this browser window open</p>
+                    <div className="flex items-center gap-3">
+                      <p className="text-2xs text-muted-cv">Please keep this browser window open</p>
+                      <button
+                        type="button"
+                        onClick={handleReset}
+                        className="text-xs text-error-600 hover:underline font-medium"
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   </div>
                 )}
 
-                {/* Completed State */}
+                {/* Completed State with Premium Download Center */}
                 {overallState === 'completed' && (
                   <>
-                    {/* Success celebratory banner when all succeeded */}
-                    {failedCount === 0 && completedCount > 0 && (
-                      <div
-                        className="p-5 rounded-xl border flex items-center justify-between flex-wrap gap-4"
-                        style={{ backgroundColor: '#22c55e0a', borderColor: '#22c55e35' }}
-                      >
-                        <div className="flex items-center gap-3.5">
-                          <div className="w-11 h-11 rounded-xl bg-success-500 flex items-center justify-center text-white flex-shrink-0">
-                            <CheckCircle2 size={24} />
-                          </div>
-                          <div>
-                            <h3 className="text-base font-bold text-primary">
-                              {completedCount} file{completedCount !== 1 ? 's' : ''} converted successfully!
-                            </h3>
-                            <p className="text-xs text-muted-cv mt-0.5">
-                              Processed {tool.processingMode === 'local' ? 'privately on your device' : 'securely'}. Ready for download.
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {completedCount > 1 ? (
-                            <button
-                              onClick={handleDownloadAll}
-                              className="btn-primary btn-md gap-2"
-                              style={{ backgroundColor: meta.color }}
-                            >
-                              <DownloadCloud size={15} /> Download All Files
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => {
-                                const comp = files.find((f) => f.state === 'completed');
-                                if (comp) handleDownload(comp);
-                              }}
-                              className="btn-primary btn-md gap-2"
-                              style={{ backgroundColor: meta.color }}
-                            >
-                              <DownloadCloud size={15} /> Download Result
-                            </button>
-                          )}
-                          <button onClick={handleReset} className="btn-secondary btn-md gap-1.5">
-                            <RefreshCw size={14} /> Convert Another
-                          </button>
-                        </div>
-                      </div>
+                    {completedCount > 0 && (
+                      <DownloadCenter
+                        files={files
+                          .filter((f) => f.state === 'completed')
+                          .map((f) => ({
+                            id: f.id,
+                            originalFile: f.file,
+                            result: f.result,
+                            results: f.results,
+                            durationMs: f.durationMs || 1000,
+                            completedAt: f.completedAt || new Date(),
+                            jobId: f.jobId,
+                          }))}
+                        toolName={tool.name}
+                        toolSlug={tool.slug}
+                        categoryColor={meta.color}
+                        onRetry={handleReset}
+                        onClear={handleReset}
+                      />
                     )}
 
                     {/* Friendly Error Banner when failures occur */}
                     {failedCount > 0 && (
                       <div
-                        className="p-5 rounded-xl border space-y-3"
+                        className="p-5 rounded-xl border space-y-3 mt-4"
                         style={{ backgroundColor: '#ef444408', borderColor: '#ef444430' }}
                       >
                         <div className="flex items-start gap-3">
@@ -1662,12 +1766,14 @@ export const ToolPage: React.FC = () => {
                       </div>
                     )}
 
-                    {/* List of completed/failed items */}
-                    <div className="space-y-2">
-                      {files.map((pf) => (
-                        <FileItem key={pf.id} pf={pf} color={meta.color} onRemove={handleRemove} onDownload={handleDownload} />
-                      ))}
-                    </div>
+                    {/* Fallback item list if no download center displayed */}
+                    {completedCount === 0 && files.length > 0 && (
+                      <div className="space-y-2 mt-4">
+                        {files.map((pf) => (
+                          <FileItem key={pf.id} pf={pf} color={meta.color} onRemove={handleRemove} onDownload={handleDownload} />
+                        ))}
+                      </div>
+                    )}
                   </>
                 )}
               </div>

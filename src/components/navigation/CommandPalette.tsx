@@ -132,7 +132,7 @@ export const CommandPalette: React.FC = () => {
               setSearchQuery(e.target.value);
               setSelectedIndex(0);
             }}
-            placeholder="Search 90+ tools... e.g. 'compress pdf', 'jpg to webp', 'excel to json'"
+            placeholder="Search all tools... e.g. 'compress pdf', 'jpg to pdf', 'excel to csv'"
             className="flex-1 bg-transparent text-sm outline-none"
             style={{ color: 'var(--text-primary)' }}
             aria-label="Search tools"

@@ -146,10 +146,10 @@ export const Header: React.FC = () => {
                 color: 'var(--text-muted)',
                 minWidth: '200px',
               }}
-              aria-label="Search all 93 tools (Shortcut: Ctrl+K)"
+              aria-label="Search all tools (Shortcut: Ctrl+K)"
             >
               <Search size={15} className="text-secondary flex-shrink-0" />
-              <span className="flex-1 text-left text-xs font-medium">Search 90+ tools...</span>
+              <span className="flex-1 text-left text-xs font-medium">Search all tools...</span>
               <kbd
                 className="hidden md:inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-mono border shadow-sm"
                 style={{
@@ -213,6 +213,8 @@ export const Header: React.FC = () => {
                   <div className="absolute right-0 top-11 z-[120] w-56 rounded-xl border p-2 shadow-cv-lg" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
                     <p className="px-3 py-2 text-xs text-muted-cv truncate">{user.email}</p>
                     <Link onClick={() => setProfileMenuOpen(false)} to="/dashboard" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Dashboard</Link>
+                    <Link onClick={() => setProfileMenuOpen(false)} to="/history" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Conversion History</Link>
+                    <Link onClick={() => setProfileMenuOpen(false)} to="/admin" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Admin Console</Link>
                     <Link onClick={() => setProfileMenuOpen(false)} to="/settings" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Account settings</Link>
                     <button onClick={async () => { if (auth) await signOut(auth); setUser(null); setProfileMenuOpen(false); }} className="w-full text-left rounded-lg px-3 py-2 text-sm text-error-600 hover:bg-hover-cv">Sign out</button>
                   </div>
@@ -292,6 +294,27 @@ export const Header: React.FC = () => {
                     <span className="w-1.5 h-1.5 rounded-full bg-success-500" />
                     <span>Private &amp; local processing in your browser</span>
                   </div>
+                  <Link
+                    to="/dashboard"
+                    className="block px-4 py-3 rounded-lg text-sm font-medium text-secondary hover:bg-hover-cv"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    Dashboard
+                  </Link>
+                  <Link
+                    to="/history"
+                    className="block px-4 py-3 rounded-lg text-sm font-medium text-secondary hover:bg-hover-cv"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    Conversion History
+                  </Link>
+                  <Link
+                    to="/admin"
+                    className="block px-4 py-3 rounded-lg text-sm font-medium text-secondary hover:bg-hover-cv"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    Admin Console
+                  </Link>
                   <Link
                     to="/pricing"
                     className="block px-4 py-3 rounded-lg text-sm font-medium text-warning-600 hover:bg-hover-cv"

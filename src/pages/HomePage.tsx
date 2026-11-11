@@ -222,7 +222,7 @@ const CategoriesSection: React.FC = () => {
           </Link>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
           {categories.map((cat) => (
             <Link
               key={cat.id}
@@ -753,11 +753,11 @@ const PremiumCTA: React.FC = () => {
             </div>
             <h2 className="text-2xl font-bold mb-2">Unlock the full platform</h2>
             <p className="text-secondary max-w-lg">
-              Larger files, batch processing, AI tools, advanced OCR, cloud storage,
-              saved workflows, and priority processing.
+              High-volume files, batch conversions, archive utilities,
+              saved workflows, and priority local processing.
             </p>
             <div className="flex flex-wrap gap-3 mt-4">
-              {['Larger file limits', 'Batch processing', 'AI tools', 'OCR', 'Cloud storage', 'Saved workflows'].map((f) => (
+              {['High-volume files', 'Batch processing', 'PDF & Image tools', 'Data conversion', 'ZIP compression', 'Saved workflows'].map((f) => (
                 <div key={f} className="flex items-center gap-1.5 text-xs text-secondary">
                   <CheckCircle2 size={12} style={{ color: '#22c55e' }} />
                   {f}

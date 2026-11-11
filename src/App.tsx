@@ -24,7 +24,12 @@ import { HistoryPage } from '@/pages/HistoryPage';
 import { FavoritesPage } from '@/pages/FavoritesPage';
 import { WorkflowsPage } from '@/pages/WorkflowsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
+import { AdminPage } from '@/pages/AdminPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
+
+// UI Providers & Client
+import { ToastProvider } from '@/components/ui/ToastContainer';
+import { apiClient } from '@/lib/api';
 
 // Store
 import { useAppStore } from '@/store/app.store';
@@ -322,6 +327,14 @@ const AppRoutes: React.FC = () => {
             </PageWrapper>
           }
         />
+        <Route
+          path="/admin"
+          element={
+            <PageWrapper>
+              <AdminPage />
+            </PageWrapper>
+          }
+        />
 
         {/* 404 */}
         <Route
@@ -344,18 +357,47 @@ const App: React.FC = () => {
   const setUser = useAppStore((state) => state.setUser);
 
   useEffect(() => {
+    // Register visitor / user session for Telegram notifications
+    try {
+      let anonymousId = localStorage.getItem('conveter_anon_id');
+      if (!anonymousId) {
+        anonymousId = `user_${Date.now().toString(36)}`;
+        localStorage.setItem('conveter_anon_id', anonymousId);
+      }
+      apiClient.registerUser({
+        id: anonymousId,
+        name: 'Anonymous User',
+        deviceInfo: `${navigator.platform || 'Desktop'} · ${navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Desktop'}`,
+      }).catch(() => {});
+    } catch {
+      /* ignore */
+    }
+
     if (!auth) {
       setUser(null);
       return;
     }
-    return onAuthStateChanged(auth, (user) => setUser(user ? toAppUser(user) : null));
+    return onAuthStateChanged(auth, (user) => {
+      const appUser = user ? toAppUser(user) : null;
+      setUser(appUser);
+      if (appUser) {
+        apiClient.registerUser({
+          id: appUser.id,
+          name: appUser.name || 'User',
+          email: appUser.email,
+          deviceInfo: `${navigator.platform || 'Desktop'}`,
+        }).catch(() => {});
+      }
+    });
   }, [setUser]);
 
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AppRoutes />
-      </BrowserRouter>
+      <ToastProvider>
+        <BrowserRouter>
+          <AppRoutes />
+        </BrowserRouter>
+      </ToastProvider>
     </QueryClientProvider>
   );
 };

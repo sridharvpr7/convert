@@ -151,7 +151,7 @@ export const SettingsPage: React.FC = () => {
               >
                 <div>
                   <p className="text-sm font-semibold text-primary">Free Plan</p>
-                  <p className="text-xs text-muted-cv">Access to all 93 tools · Local processing</p>
+                  <p className="text-xs text-muted-cv">Access to all tools · Local processing</p>
                 </div>
                 <Link to="/pricing" className="btn-primary btn-sm">Upgrade to Premium</Link>
               </div>

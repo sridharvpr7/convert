@@ -505,7 +505,7 @@ export const ToolsPage: React.FC = () => {
                 }}
                 className="btn-primary btn-sm mt-2"
               >
-                Show All 93 Tools
+                Show All Tools
               </button>
             </div>
           ) : (

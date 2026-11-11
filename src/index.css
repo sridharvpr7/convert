@@ -352,6 +352,35 @@
   }
 
   /* ----------------------------------------
+     Glass & Modern SaaS Surfaces
+  ---------------------------------------- */
+  .glass-card {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(226, 229, 240, 0.8);
+  }
+  .dark .glass-card {
+    background: rgba(18, 18, 28, 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .glow-border {
+    position: relative;
+    transition: all 0.25s ease;
+  }
+  .glow-border:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 20px rgba(91, 106, 248, 0.2);
+  }
+
+  .dark .glow-border:hover {
+    box-shadow: 0 0 25px rgba(91, 106, 248, 0.35);
+  }
+
+  /* ----------------------------------------
      Dividers
   ---------------------------------------- */
   .divider {
