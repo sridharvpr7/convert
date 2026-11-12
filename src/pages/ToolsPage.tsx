@@ -16,9 +16,13 @@ interface ToolCardProps {
 }
 
 const ToolCard: React.FC<ToolCardProps> = ({ tool, view }) => {
-  const { isFavoriteTool, toggleFavoriteTool } = useAppStore();
+  const { isFavoriteTool, toggleFavoriteTool, siteDisplayConfig } = useAppStore();
   const meta = CATEGORY_META[tool.category];
   const isFav = isFavoriteTool(tool.slug);
+  const toolSetting = siteDisplayConfig?.tools?.[tool.slug];
+  const isPro = toolSetting?.tier === 'premium' || tool.premium;
+  const isMaint = Boolean(siteDisplayConfig?.global?.maintenanceMode || toolSetting?.maintenance);
+  const isDisabled = toolSetting ? toolSetting.enabled === false : false;
 
   if (view === 'list') {
     return (
@@ -48,7 +52,7 @@ const ToolCard: React.FC<ToolCardProps> = ({ tool, view }) => {
             >
               {meta.name.replace(' Tools', '')}
             </span>
-            {tool.premium && (
+            {isPro && (
               <span className="badge text-2xs" style={{ backgroundColor: '#f59e0b15', color: '#f59e0b', fontSize: '10px' }}>
                 Pro
               </span>
@@ -56,6 +60,16 @@ const ToolCard: React.FC<ToolCardProps> = ({ tool, view }) => {
             {tool.new && (
               <span className="badge text-2xs" style={{ backgroundColor: meta.color + '15', color: meta.color, fontSize: '10px' }}>
                 New
+              </span>
+            )}
+            {isDisabled && (
+              <span className="badge text-2xs bg-rose-500/15 text-rose-500 font-semibold" style={{ fontSize: '10px' }}>
+                Disabled
+              </span>
+            )}
+            {isMaint && (
+              <span className="badge text-2xs bg-amber-500/15 text-amber-500 font-semibold" style={{ fontSize: '10px' }}>
+                Maintenance
               </span>
             )}
           </div>
@@ -126,8 +140,14 @@ const ToolCard: React.FC<ToolCardProps> = ({ tool, view }) => {
           {tool.new && (
             <span className="badge" style={{ backgroundColor: meta.color + '15', color: meta.color, fontSize: '10px' }}>New</span>
           )}
-          {tool.premium && (
+          {isPro && (
             <span className="badge" style={{ backgroundColor: '#f59e0b15', color: '#f59e0b', fontSize: '10px' }}>Pro</span>
+          )}
+          {isDisabled && (
+            <span className="badge bg-rose-500/15 text-rose-500 font-semibold" style={{ fontSize: '10px' }}>Disabled</span>
+          )}
+          {isMaint && (
+            <span className="badge bg-amber-500/15 text-amber-500 font-semibold" style={{ fontSize: '10px' }}>Maint</span>
           )}
           <button
             onClick={(e) => {
@@ -207,6 +227,7 @@ const ToolCard: React.FC<ToolCardProps> = ({ tool, view }) => {
 // ────────────────────────────────────────────────
 export const ToolsPage: React.FC = () => {
   const { category } = useParams<{ category?: string }>();
+  const { siteDisplayConfig } = useAppStore();
   const [query, setQuery] = useState('');
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [filterPremium, setFilterPremium] = useState<'all' | 'free' | 'premium'>('all');
@@ -215,16 +236,37 @@ export const ToolsPage: React.FC = () => {
   const activeCategory = category as ToolCategory | undefined;
   const categoryMeta = activeCategory ? CATEGORY_META[activeCategory] : null;
 
+  const categories = useMemo(() => {
+    return Object.values(CATEGORY_META).filter((cat) => {
+      if (siteDisplayConfig?.categories?.[cat.id]?.visible === false) return false;
+      return true;
+    });
+  }, [siteDisplayConfig]);
+
   const allTools = useMemo(() => {
     let result = activeCategory ? getToolsByCategory(activeCategory) : TOOLS;
+    // Filter by administrative visibility configuration
+    result = result.filter((t) => {
+      if (siteDisplayConfig?.tools?.[t.slug]?.visible === false) return false;
+      if (siteDisplayConfig?.categories?.[t.category]?.visible === false) return false;
+      return true;
+    });
     if (query) result = result.filter((t) => searchTools(query).some((r) => r.id === t.id));
-    if (filterPremium === 'free') result = result.filter((t) => !t.premium);
-    if (filterPremium === 'premium') result = result.filter((t) => t.premium);
+    if (filterPremium === 'free') {
+      result = result.filter((t) => {
+        const isPrem = siteDisplayConfig?.tools?.[t.slug]?.tier === 'premium' || t.premium;
+        return !isPrem;
+      });
+    }
+    if (filterPremium === 'premium') {
+      result = result.filter((t) => {
+        const isPrem = siteDisplayConfig?.tools?.[t.slug]?.tier === 'premium' || t.premium;
+        return isPrem;
+      });
+    }
     if (filterOffline) result = result.filter((t) => t.offlineSupported);
     return result;
-  }, [activeCategory, query, filterPremium, filterOffline]);
-
-  const categories = Object.values(CATEGORY_META);
+  }, [activeCategory, query, filterPremium, filterOffline, siteDisplayConfig]);
 
   return (
     <div className="pt-20 pb-16">

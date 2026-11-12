@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
-  Search, Bell, ChevronDown, Menu, X, LogIn, Zap, AlertTriangle,
+  Search, Bell, ChevronDown, Menu, X, LogIn, Zap, AlertTriangle, Sparkles,
 } from 'lucide-react';
 import { ConveterLogo } from '@/components/ui/Logo';
 import { ThemeSwitcher } from '@/components/ui/ThemeSwitcher';
@@ -10,16 +10,6 @@ import { useAppStore } from '@/store/app.store';
 import { auth } from '@/lib/firebase';
 import { signOut } from 'firebase/auth';
 import { apiClient } from '@/lib/api';
-
-const NAV_LINKS = [
-  { label: 'Home', href: '/' },
-  { label: 'Tools', href: '/tools', hasMegaMenu: true },
-  { label: 'PDF', href: '/tools/pdf' },
-  { label: 'Image', href: '/tools/image' },
-  { label: 'Data', href: '/tools/data' },
-  { label: 'Utilities', href: '/tools/utilities' },
-  { label: 'Archive', href: '/tools/archive' },
-];
 
 export const Header: React.FC = () => {
   const location = useLocation();
@@ -34,6 +24,8 @@ export const Header: React.FC = () => {
     setUser,
     premiumConfig,
     setPremiumConfig,
+    siteDisplayConfig,
+    setSiteDisplayConfig,
   } = useAppStore();
 
   const unreadCount = notifications.filter((n) => !n.read).length;
@@ -43,14 +35,19 @@ export const Header: React.FC = () => {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const toolsButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Fetch server-side premium config on mount
+  // Fetch server-side configs on mount if not already present
   useEffect(() => {
-    apiClient.getPublicPremiumConfig().then((config) => {
-      if (config) {
-        setPremiumConfig(config);
-      }
-    }).catch(() => {});
-  }, [setPremiumConfig]);
+    if (!premiumConfig) {
+      apiClient.getPublicPremiumConfig().then((config) => {
+        if (config) setPremiumConfig(config);
+      }).catch(() => {});
+    }
+    if (!siteDisplayConfig) {
+      apiClient.getPublicSiteConfig().then((config) => {
+        if (config) setSiteDisplayConfig(config);
+      }).catch(() => {});
+    }
+  }, [premiumConfig, siteDisplayConfig, setPremiumConfig, setSiteDisplayConfig]);
 
   // Track scroll for header shadow
   useEffect(() => {
@@ -81,27 +78,74 @@ export const Header: React.FC = () => {
     return location.pathname.startsWith(href);
   };
 
-  // Determine whether to display the Premium button according to JSON config rules:
-  // Must have premium.enabled === true AND showPremiumButton === true
-  const showPremium = premiumConfig
-    ? Boolean(premiumConfig.enabled && premiumConfig.showPremiumButton)
-    : true;
+  // If header is disabled globally in admin display controls
+  if (siteDisplayConfig?.global?.showHeader === false) {
+    return null;
+  }
 
-  const isMaintenance = Boolean(premiumConfig?.maintenanceMode);
+  // Determine whether to display the Premium button according to JSON config rules:
+  const showPremium =
+    (premiumConfig ? Boolean(premiumConfig.enabled && premiumConfig.showPremiumButton) : true) &&
+    (siteDisplayConfig?.navigation?.showPremium !== false);
+
+  const isMaintenance = Boolean(
+    premiumConfig?.maintenanceMode || siteDisplayConfig?.global?.maintenanceMode
+  );
+
+  const showAnnouncement = Boolean(siteDisplayConfig?.global?.showAnnouncementBar);
+  const announcementText =
+    siteDisplayConfig?.global?.announcementText ||
+    '⚡ CONVET PULSE: Fast, Private, Client-Side Conversions · Zero tracking';
+
+  // Dynamic Navigation Links based on display controls
+  const navLinks = [
+    { label: 'Home', href: '/', show: siteDisplayConfig?.navigation?.showHome !== false },
+    { label: 'Tools', href: '/tools', hasMegaMenu: true, show: siteDisplayConfig?.navigation?.showTools !== false },
+    { label: 'Dashboard', href: '/dashboard', show: siteDisplayConfig?.navigation?.showDashboard !== false },
+    { label: 'PDF', href: '/tools/pdf', show: siteDisplayConfig?.categories?.pdf?.visible !== false },
+    { label: 'Image', href: '/tools/image', show: siteDisplayConfig?.categories?.image?.visible !== false },
+    { label: 'Data', href: '/tools/data', show: siteDisplayConfig?.categories?.data?.visible !== false },
+    { label: 'Utilities', href: '/tools/utilities', show: siteDisplayConfig?.categories?.utilities?.visible !== false },
+    { label: 'Archive', href: '/tools/archive', show: siteDisplayConfig?.categories?.archive?.visible !== false },
+    { label: 'Pricing', href: '/pricing', show: siteDisplayConfig?.navigation?.showPricing !== false },
+  ].filter((item) => item.show);
+
+  // Offset calculation for banners
+  let topOffsetClass = 'top-0';
+  if (isMaintenance && showAnnouncement) {
+    topOffsetClass = 'top-14';
+  } else if (isMaintenance || showAnnouncement) {
+    topOffsetClass = 'top-7';
+  }
 
   return (
     <>
+      {showAnnouncement && (
+        <div
+          className="fixed top-0 left-0 right-0 z-[65] text-xs py-1.5 px-4 text-center font-medium flex items-center justify-center gap-2 shadow-sm"
+          style={{
+            backgroundColor: 'var(--accent)',
+            color: '#ffffff',
+          }}
+        >
+          <Sparkles size={12} />
+          <span>{announcementText}</span>
+        </div>
+      )}
+
       {isMaintenance && (
-        <div className="fixed top-0 left-0 right-0 z-[60] bg-warning-500/90 text-white text-xs py-1 px-4 text-center font-medium flex items-center justify-center gap-1.5 shadow-sm">
+        <div
+          className={`fixed left-0 right-0 z-[60] bg-warning-500/95 text-white text-xs py-1 px-4 text-center font-medium flex items-center justify-center gap-1.5 shadow-sm ${
+            showAnnouncement ? 'top-7' : 'top-0'
+          }`}
+        >
           <AlertTriangle size={13} />
           <span>Scheduled maintenance mode is active. Some tools may be temporarily limited.</span>
         </div>
       )}
 
       <header
-        className={`fixed left-0 right-0 z-50 h-14 flex items-center transition-all duration-200 ${
-          isMaintenance ? 'top-6' : 'top-0'
-        }`}
+        className={`fixed left-0 right-0 z-50 h-14 flex items-center transition-all duration-200 ${topOffsetClass}`}
         style={{
           backgroundColor: scrolled ? 'var(--surface)' : 'var(--bg)',
           borderBottom: '1px solid',
@@ -117,7 +161,7 @@ export const Header: React.FC = () => {
 
           {/* Desktop Navigation */}
           <nav className="hidden lg:flex items-center gap-0.5 flex-1">
-            {NAV_LINKS.map((link) => {
+            {navLinks.map((link) => {
               if (link.hasMegaMenu) {
                 return (
                   <button
@@ -165,43 +209,49 @@ export const Header: React.FC = () => {
           {/* Right section */}
           <div className="flex items-center gap-1 ml-auto">
             {/* Search */}
-            <button
-              onClick={() => setSearchOpen(true)}
-              className="hidden sm:flex items-center gap-2 h-9 px-3 rounded-lg text-sm transition-all duration-150 border hover:border-accent"
-              style={{
-                backgroundColor: 'var(--muted)',
-                borderColor: 'var(--border)',
-                color: 'var(--text-muted)',
-                minWidth: '200px',
-              }}
-              aria-label="Search all tools (Shortcut: Ctrl+K)"
-            >
-              <Search size={15} className="text-secondary flex-shrink-0" />
-              <span className="flex-1 text-left text-xs font-medium">Search all tools...</span>
-              <kbd
-                className="hidden md:inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-mono border shadow-sm"
-                style={{
-                  borderColor: 'var(--border)',
-                  backgroundColor: 'var(--surface)',
-                  color: 'var(--text-muted)',
-                  fontSize: '10px',
-                }}
-              >
-                Ctrl+K
-              </kbd>
-            </button>
+            {siteDisplayConfig?.features?.showSearch !== false && (
+              <>
+                <button
+                  onClick={() => setSearchOpen(true)}
+                  className="hidden sm:flex items-center gap-2 h-9 px-3 rounded-lg text-sm transition-all duration-150 border hover:border-accent"
+                  style={{
+                    backgroundColor: 'var(--muted)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-muted)',
+                    minWidth: '200px',
+                  }}
+                  aria-label="Search all tools (Shortcut: Ctrl+K)"
+                >
+                  <Search size={15} className="text-secondary flex-shrink-0" />
+                  <span className="flex-1 text-left text-xs font-medium">Search all tools...</span>
+                  <kbd
+                    className="hidden md:inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-mono border shadow-sm"
+                    style={{
+                      borderColor: 'var(--border)',
+                      backgroundColor: 'var(--surface)',
+                      color: 'var(--text-muted)',
+                      fontSize: '10px',
+                    }}
+                  >
+                    Ctrl+K
+                  </kbd>
+                </button>
 
-            <button
-              onClick={() => setSearchOpen(true)}
-              className="sm:hidden btn-ghost touch-target w-10 h-10 flex items-center justify-center rounded-lg"
-              aria-label="Search tools"
-              title="Search tools"
-            >
-              <Search size={18} />
-            </button>
+                <button
+                  onClick={() => setSearchOpen(true)}
+                  className="sm:hidden btn-ghost touch-target w-10 h-10 flex items-center justify-center rounded-lg"
+                  aria-label="Search tools"
+                  title="Search tools"
+                >
+                  <Search size={18} />
+                </button>
+              </>
+            )}
 
             {/* Theme switcher */}
-            <ThemeSwitcher compact />
+            {siteDisplayConfig?.features?.showThemeToggle !== false && (
+              <ThemeSwitcher compact />
+            )}
 
             {/* Pricing / Premium Button (Controlled by server-side JSON config) */}
             {showPremium && (
@@ -315,7 +365,7 @@ export const Header: React.FC = () => {
               </button>
 
               <nav className="space-y-1">
-                {NAV_LINKS.map((link) => (
+                {navLinks.map((link: { label: string; href: string; hasMegaMenu?: boolean; show: boolean }) => (
                   <Link
                     key={link.href}
                     to={link.href}

@@ -1,7 +1,7 @@
 // ============================================================
-// CONVETER — Server API Router
-// Dispatches REST endpoints for health, jobs, users, admin, telegram,
-// premium configuration, authentication, and real-time telemetry.
+// CONVET PULSE — Server API Router
+// Dispatches REST endpoints for health, jobs, visitors, users, admin,
+// telegram, premium configuration, site display controls, and analytics.
 // ============================================================
 
 import { db } from './db.js';
@@ -22,6 +22,17 @@ import {
   isToolPremiumRestricted,
   isMaintenanceMode,
 } from './premium.js';
+import {
+  getSiteDisplayConfig,
+  getPublicSiteDisplayConfig,
+  updateSiteDisplayConfig,
+  resetSiteDisplayConfig,
+  isToolVisible,
+  isToolEnabled,
+  isToolUnderMaintenance,
+  isToolPremium,
+  isCategoryVisible,
+} from './site-display.js';
 
 export async function handleApiRoute(req, res, url) {
   const method = req.method;
@@ -76,7 +87,7 @@ export async function handleApiRoute(req, res, url) {
   }
 
   // ─────────────────────────────────────────────────────────
-  // 1. Health Check Endpoint (Render requirement)
+  // 1. Health Check Endpoint
   // ─────────────────────────────────────────────────────────
   if (pathname === '/api/health' && method === 'GET') {
     return sendJson(200, {
@@ -88,7 +99,11 @@ export async function handleApiRoute(req, res, url) {
       telegram: telegramService.getPublicStatus(),
       premium: {
         enabled: getPublicPremiumConfig().enabled,
-        maintenanceMode: isMaintenanceMode(),
+        maintenanceMode: isMaintenanceMode() || getSiteDisplayConfig().global?.maintenanceMode || false,
+      },
+      siteDisplay: {
+        version: getSiteDisplayConfig().version,
+        lastModified: getSiteDisplayConfig().lastModified,
       },
       system: {
         nodeVersion: process.version,
@@ -99,7 +114,98 @@ export async function handleApiRoute(req, res, url) {
   }
 
   // ─────────────────────────────────────────────────────────
-  // 2. Public Premium Configuration
+  // 2. Site Display Configuration Endpoints
+  // ─────────────────────────────────────────────────────────
+  if (pathname === '/api/site-config/public' && method === 'GET') {
+    return sendJson(200, { config: getPublicSiteDisplayConfig() });
+  }
+
+  if (pathname === '/api/admin/site-config' && method === 'GET') {
+    const session = requireAdmin(req);
+    if (!session) {
+      return sendJson(401, { error: 'Unauthorized: Admin session required' });
+    }
+    return sendJson(200, { config: getSiteDisplayConfig() });
+  }
+
+  if (pathname === '/api/admin/site-config' && (method === 'POST' || method === 'PUT')) {
+    const session = requireAdmin(req);
+    if (!session) {
+      return sendJson(401, { error: 'Unauthorized: Admin session required' });
+    }
+    const body = await readBody();
+    const result = updateSiteDisplayConfig(body || {});
+    if (!result.success) {
+      return sendJson(400, { error: result.error || 'Failed to update site display configuration' });
+    }
+
+    db.addAuditLog('admin_update_site_display', 'Admin', body);
+    telegramService.notifyAdminConfigChange(
+      'Website Display Controls Updated',
+      'Administrator modified website section visibility or tool availability'
+    ).catch(() => {});
+
+    return sendJson(200, { ok: true, config: result.config });
+  }
+
+  if (pathname === '/api/admin/site-config/reset' && method === 'POST') {
+    const session = requireAdmin(req);
+    if (!session) {
+      return sendJson(401, { error: 'Unauthorized: Admin session required' });
+    }
+    const result = resetSiteDisplayConfig();
+    db.addAuditLog('admin_reset_site_display', 'Admin', 'Reset site display config to defaults');
+    return sendJson(200, { ok: true, config: result.config });
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // 3. Real Visitor Tracking Endpoint
+  // ─────────────────────────────────────────────────────────
+  if (pathname === '/api/visitors/ping' && method === 'POST') {
+    const body = await readBody();
+    if (body?.visitorId) {
+      db.recordVisitor({
+        id: body.visitorId,
+        isAuthenticated: Boolean(body.isAuthenticated),
+        userId: body.userId || null,
+      });
+    }
+    return sendJson(200, { ok: true });
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // 4. Live Analytics Summary (Public / Dashboard Safe)
+  // ─────────────────────────────────────────────────────────
+  if (pathname === '/api/analytics/summary' && method === 'GET') {
+    const range = url.searchParams.get('range') || 'all';
+    const stats = db.getDetailedStats(range);
+    // Sanitize to public metrics without PII
+    return sendJson(200, {
+      summary: {
+        completedJobs: stats.completedJobs,
+        successfulConversions: stats.successfulConversions,
+        failedJobs: stats.failedJobs,
+        activeJobs: stats.activeJobs,
+        totalJobs: stats.totalJobs,
+        successRate: stats.successRate,
+        avgProcessingTimeMs: stats.avgProcessingTimeMs,
+        totalDataProcessedBytes: stats.totalDataProcessedBytes,
+        totalBytesSaved: stats.totalBytesSaved,
+        todayCount: stats.todayCount,
+        weekCount: stats.weekCount,
+        monthCount: stats.monthCount,
+        dailyTrends: stats.dailyTrends,
+        toolUsage: stats.toolUsage,
+        fileTypeDistribution: stats.fileTypeDistribution,
+        timezone: stats.timezone,
+        systemHealth: stats.systemHealth,
+        lastUpdated: new Date().toISOString(),
+      },
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // 5. Public Premium Configuration
   // ─────────────────────────────────────────────────────────
   if (pathname === '/api/premium/config' && method === 'GET') {
     return sendJson(200, { config: getPublicPremiumConfig() });
@@ -115,15 +221,23 @@ export async function handleApiRoute(req, res, url) {
       return sendJson(400, { error: 'toolSlug is required' });
     }
 
-    if (isMaintenanceMode()) {
+    if (isMaintenanceMode() || isToolUnderMaintenance(toolSlug)) {
       return sendJson(503, {
         authorized: false,
         maintenance: true,
-        message: 'The conversion platform is currently undergoing scheduled maintenance.',
+        message: 'This conversion tool is currently undergoing scheduled maintenance.',
       });
     }
 
-    const isRestricted = isToolPremiumRestricted(toolSlug);
+    if (!isToolEnabled(toolSlug)) {
+      return sendJson(403, {
+        authorized: false,
+        disabled: true,
+        error: 'This tool is currently disabled by administrator.',
+      });
+    }
+
+    const isRestricted = isToolPremium(toolSlug) || isToolPremiumRestricted(toolSlug);
     if (isRestricted && !isPremiumUser) {
       return sendJson(403, {
         authorized: false,
@@ -140,11 +254,15 @@ export async function handleApiRoute(req, res, url) {
       ).catch(() => {});
     }
 
-    return sendJson(200, { authorized: true, restricted: isRestricted });
+    return sendJson(200, {
+      authorized: true,
+      restricted: isRestricted,
+      visible: isToolVisible(toolSlug),
+    });
   }
 
   // ─────────────────────────────────────────────────────────
-  // 3. Admin Authentication & Session Endpoints
+  // 6. Admin Authentication & Session Endpoints
   // ─────────────────────────────────────────────────────────
   if (pathname === '/api/admin/login' && method === 'POST') {
     const rateCheck = await login(req);
@@ -220,7 +338,7 @@ export async function handleApiRoute(req, res, url) {
   }
 
   // ─────────────────────────────────────────────────────────
-  // 4. Admin Premium Management Endpoints
+  // 7. Admin Premium Management Endpoints
   // ─────────────────────────────────────────────────────────
   if (pathname === '/api/admin/premium-config' && method === 'GET') {
     const session = requireAdmin(req);
@@ -268,7 +386,7 @@ export async function handleApiRoute(req, res, url) {
   }
 
   // ─────────────────────────────────────────────────────────
-  // 5. Admin Analytics & Telemetry Endpoints
+  // 8. Admin Analytics & Telemetry Endpoints
   // ─────────────────────────────────────────────────────────
   if (pathname === '/api/admin/stats' && method === 'GET') {
     const timeRange = url.searchParams.get('range') || 'all';
@@ -342,7 +460,7 @@ export async function handleApiRoute(req, res, url) {
   }
 
   // ─────────────────────────────────────────────────────────
-  // 6. Conversion Jobs Endpoints (Preserved & Enhanced)
+  // 9. Conversion Jobs Endpoints (Real Conversion Tracking)
   // ─────────────────────────────────────────────────────────
   if (pathname === '/api/jobs/start' && method === 'POST') {
     const body = await readBody();
@@ -350,12 +468,40 @@ export async function handleApiRoute(req, res, url) {
       return sendJson(400, { error: 'toolSlug is required' });
     }
 
-    // Verify premium restriction
-    if (isToolPremiumRestricted(body.toolSlug) && !body.isPremiumUser) {
-      return sendJson(403, { error: 'Premium subscription required for this tool', restricted: true });
+    const toolSlug = body.toolSlug;
+
+    // Check system maintenance
+    if (isMaintenanceMode() || isToolUnderMaintenance(toolSlug)) {
+      return sendJson(503, {
+        error: 'This tool is currently undergoing scheduled maintenance',
+        maintenance: true,
+      });
     }
 
-    const job = db.createJob(body);
+    // Check tool enabled status
+    if (!isToolEnabled(toolSlug)) {
+      return sendJson(403, {
+        error: 'This conversion tool is currently disabled by administrator',
+        disabled: true,
+      });
+    }
+
+    // Verify premium restriction
+    const restricted = isToolPremium(toolSlug) || isToolPremiumRestricted(toolSlug);
+    if (restricted && !body.isPremiumUser) {
+      return sendJson(403, {
+        error: 'Premium subscription required for this tool',
+        restricted: true,
+      });
+    }
+
+    const job = db.createJob({
+      ...body,
+      status: 'processing',
+      processingStartedAt: new Date().toISOString(),
+      fileSizeBytes: body.inputFileSize || 0,
+    });
+
     // Asynchronously send Telegram notification
     telegramService.notifyConversionStarted(job).catch((err) => {
       console.error('[API] notifyConversionStarted failed:', err.message);
@@ -370,13 +516,17 @@ export async function handleApiRoute(req, res, url) {
       return sendJson(400, { error: 'Job id is required' });
     }
 
+    const nowIso = new Date().toISOString();
     const updated = db.updateJob(body.id, {
       status: 'completed',
       output_file_name: body.outputFileName || null,
       output_file_size: body.outputFileSize || 0,
       output_format: body.outputFormat || null,
+      file_size_bytes: body.fileSizeBytes || body.outputFileSize || 0,
       duration_ms: body.durationMs || 0,
-      completed_at: new Date().toISOString(),
+      processing_duration_ms: body.durationMs || 0,
+      processing_completed_at: nowIso,
+      completed_at: nowIso,
     });
 
     if (updated) {
@@ -394,11 +544,15 @@ export async function handleApiRoute(req, res, url) {
       return sendJson(400, { error: 'Job id is required' });
     }
 
+    const nowIso = new Date().toISOString();
     const updated = db.updateJob(body.id, {
       status: 'failed',
       duration_ms: body.durationMs || 0,
+      processing_duration_ms: body.durationMs || 0,
+      error_code: body.errorCode || 'CONVERSION_FAILED',
       error_summary: body.errorSummary || 'Processing failed',
-      completed_at: new Date().toISOString(),
+      processing_completed_at: nowIso,
+      completed_at: nowIso,
     });
 
     if (updated) {
@@ -422,7 +576,16 @@ export async function handleApiRoute(req, res, url) {
     const offset = parseInt(url.searchParams.get('offset') || '0', 10);
 
     const jobs = db.listJobs({ status, toolSlug, search, limit, offset, timeRange });
-    return sendJson(200, { jobs, count: jobs.length });
+    const totalCount = db.countJobs({ status, toolSlug, search, timeRange });
+
+    return sendJson(200, {
+      jobs,
+      count: jobs.length,
+      totalCount,
+      limit,
+      offset,
+      page: Math.floor(offset / limit) + 1,
+    });
   }
 
   // Single job lookup / comment / download: /api/jobs/:id
@@ -465,7 +628,7 @@ export async function handleApiRoute(req, res, url) {
   }
 
   // ─────────────────────────────────────────────────────────
-  // 7. User Registration Tracking Endpoints
+  // 10. User Registration Tracking Endpoints
   // ─────────────────────────────────────────────────────────
   if (pathname === '/api/users/register' && method === 'POST') {
     const body = await readBody();
@@ -490,7 +653,7 @@ export async function handleApiRoute(req, res, url) {
   }
 
   // ─────────────────────────────────────────────────────────
-  // 8. Telegram Webhook Endpoint
+  // 11. Telegram Webhook Endpoint
   // ─────────────────────────────────────────────────────────
   if (pathname === '/api/telegram/webhook' && method === 'POST') {
     const secretHeader = req.headers['x-telegram-bot-api-secret-token'];

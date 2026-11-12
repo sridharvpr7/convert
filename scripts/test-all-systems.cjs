@@ -393,6 +393,120 @@ async function runTests() {
     assert.strictEqual(result.data.authorized, true);
   });
 
+  // ── 5. Site Display Control & Real Analytics Verification ──
+  console.log('\n--- 5. Site Display Control & Real Analytics ---');
+  const {
+    getPublicSiteDisplayConfig,
+    updateSiteDisplayConfig,
+    isToolEnabled,
+    isToolUnderMaintenance,
+  } = await import('../server/site-display.js');
+
+  await testAsync('GET /api/site-config/public returns public display config without secrets', async () => {
+    const mock = mockRequest('GET', '/api/site-config/public');
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/site-config/public'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 200);
+    assert(result.data.config);
+    assert(result.data.config.global);
+    assert(result.data.config.tools);
+    assert(result.data.config.categories);
+  });
+
+  await testAsync('Security: GET /api/admin/site-config without auth returns 401 Unauthorized', async () => {
+    const mock = mockRequest('GET', '/api/admin/site-config');
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/admin/site-config'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 401);
+  });
+
+  await testAsync('Functional Block: Disabled tool returns 403 on /api/jobs/start', async () => {
+    // Temporarily disable 'word-counter'
+    updateSiteDisplayConfig({
+      tools: {
+        'word-counter': { enabled: false },
+      },
+    });
+
+    const mock = mockRequest('POST', '/api/jobs/start', {
+      toolSlug: 'word-counter',
+      toolName: 'Word Counter',
+    });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/jobs/start'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 403);
+    assert.strictEqual(result.data.disabled, true);
+
+    // Re-enable
+    updateSiteDisplayConfig({
+      tools: {
+        'word-counter': { enabled: true },
+      },
+    });
+  });
+
+  await testAsync('Functional Block: Tool under maintenance returns 503 on /api/jobs/start', async () => {
+    // Put 'hash-generator' into maintenance
+    updateSiteDisplayConfig({
+      tools: {
+        'hash-generator': { maintenance: true },
+      },
+    });
+
+    const mock = mockRequest('POST', '/api/jobs/start', {
+      toolSlug: 'hash-generator',
+      toolName: 'Hash Generator',
+    });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/jobs/start'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 503);
+    assert.strictEqual(result.data.maintenance, true);
+
+    // Restore
+    updateSiteDisplayConfig({
+      tools: {
+        'hash-generator': { maintenance: false },
+      },
+    });
+  });
+
+  await testAsync('POST /api/visitors/ping records visitor and updates visitor stats', async () => {
+    const mock = mockRequest('POST', '/api/visitors/ping', {
+      visitorId: 'test_vis_9999',
+      isAuthenticated: false,
+    });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/visitors/ping'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 200);
+    assert.strictEqual(result.data.ok, true);
+
+    const detailed = db.getDetailedStats('all');
+    assert(detailed.visitors.uniqueVisitors >= 1);
+  });
+
+  await testAsync('GET /api/analytics/summary returns sanitized public analytics with real metrics', async () => {
+    const mock = mockRequest('GET', '/api/analytics/summary');
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/analytics/summary'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 200);
+    assert(result.data.summary);
+    assert.strictEqual(typeof result.data.summary.completedJobs, 'number');
+    assert.strictEqual(typeof result.data.summary.successRate, 'number');
+    assert.strictEqual(result.data.summary.timezone, 'Asia/Kolkata (+05:30)');
+    assert(Array.isArray(result.data.summary.dailyTrends));
+  });
+
+  test('Asia/Kolkata Cutoffs (+05:30) correctly computes boundaries', () => {
+    const { getAsiaKolkataCutoffs } = db;
+    assert(typeof getAsiaKolkataCutoffs === 'function');
+    const cutoffs = getAsiaKolkataCutoffs();
+    assert(cutoffs.today);
+    assert(cutoffs.thisWeek);
+    assert(cutoffs.thisMonth);
+    // Boundary format must be valid ISO string
+    assert(!isNaN(new Date(cutoffs.today).getTime()));
+  });
+
   // Summary
   console.log('\n========================================');
   console.log(`QA RESULTS: ${passed} passed, ${failed} failed`);

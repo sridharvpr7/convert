@@ -220,7 +220,12 @@ const HeroSection: React.FC = () => {
 // Categories Section
 // ────────────────────────────────────────────────
 const CategoriesSection: React.FC = () => {
-  const categories = Object.values(CATEGORY_META);
+  const { siteDisplayConfig } = useAppStore();
+  const categories = Object.values(CATEGORY_META).filter(
+    (cat) => siteDisplayConfig?.categories?.[cat.id]?.visible !== false
+  );
+
+  if (categories.length === 0) return null;
 
   return (
     <section className="py-16" id="categories">
@@ -292,8 +297,16 @@ const getCategoryIcon = (id: string, size = 16): React.ReactNode => {
 // Popular Tools Section
 // ────────────────────────────────────────────────
 const PopularToolsSection: React.FC = () => {
-  const popular = getPopularTools(12);
-  const { isFavoriteTool, toggleFavoriteTool } = useAppStore();
+  const { siteDisplayConfig, isFavoriteTool, toggleFavoriteTool } = useAppStore();
+  const allPopular = getPopularTools(12);
+
+  const popular = allPopular.filter((tool) => {
+    if (siteDisplayConfig?.tools?.[tool.slug]?.visible === false) return false;
+    if (tool.category && siteDisplayConfig?.categories?.[tool.category]?.visible === false) return false;
+    return true;
+  });
+
+  if (popular.length === 0) return null;
 
   return (
     <section className="py-16" style={{ backgroundColor: 'var(--muted)' }}>
@@ -895,17 +908,20 @@ const Footer: React.FC = () => {
 // HOME PAGE
 // ────────────────────────────────────────────────
 export const HomePage: React.FC = () => {
+  const { siteDisplayConfig } = useAppStore();
+  const hp = siteDisplayConfig?.homepage;
+  const global = siteDisplayConfig?.global;
+
   return (
     <main>
-      <HeroSection />
-      <CategoriesSection />
-      <PopularToolsSection />
-      <HowItWorksSection />
-      <AISection />
-      <NewToolsSection />
-      <PrivacySection />
-      <PremiumCTA />
-      <Footer />
+      {hp?.showHero !== false && <HeroSection />}
+      {hp?.showCategories !== false && <CategoriesSection />}
+      {hp?.showFeaturedTools !== false && <PopularToolsSection />}
+      {hp?.showHowItWorks !== false && <HowItWorksSection />}
+      {hp?.showCTA !== false && <AISection />}
+      {hp?.showFeatures !== false && <PrivacySection />}
+      {hp?.showPricing !== false && <PremiumCTA />}
+      {global?.showFooter !== false && <Footer />}
     </main>
   );
 };

@@ -80,39 +80,48 @@ interface UploadZoneProps {
   multiple?: boolean;
   supportedFormats?: string[];
   color: string;
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
 const UploadZone: React.FC<UploadZoneProps> = ({
-  onFiles, accept, multiple = true, supportedFormats, color,
+  onFiles, accept, multiple = true, supportedFormats, color, disabled, disabledReason,
 }) => {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop: onFiles, accept, multiple,
+    onDrop: disabled ? () => {} : onFiles,
+    accept,
+    multiple,
+    disabled: Boolean(disabled),
   });
 
   return (
     <div
       {...getRootProps()}
-      className={`upload-zone py-16 px-8 cursor-pointer transition-all duration-200 ${isDragActive ? 'active' : ''}`}
+      className={`upload-zone py-16 px-8 transition-all duration-200 ${disabled ? 'opacity-60 cursor-not-allowed border-dashed' : 'cursor-pointer'} ${isDragActive ? 'active' : ''}`}
       style={isDragActive ? { borderColor: color, backgroundColor: color + '08' } : {}}
     >
-      <input {...getInputProps()} />
+      <input {...getInputProps()} disabled={Boolean(disabled)} />
       <div className="flex flex-col items-center gap-4 text-center">
         <div
           className="w-16 h-16 flex items-center justify-center rounded-2xl transition-all duration-200"
           style={{
-            backgroundColor: isDragActive ? color + '15' : 'var(--muted)',
-            color: isDragActive ? color : 'var(--text-muted)',
+            backgroundColor: disabled ? 'var(--muted)' : (isDragActive ? color + '15' : 'var(--muted)'),
+            color: disabled ? 'var(--text-muted)' : (isDragActive ? color : 'var(--text-muted)'),
           }}
         >
-          {isDragActive ? <DownloadCloud size={32} /> : <Upload size={32} />}
+          {disabled ? <Lock size={30} /> : (isDragActive ? <DownloadCloud size={32} /> : <Upload size={32} />)}
         </div>
         <div>
           <p className="text-base font-semibold text-primary mb-1">
-            {isDragActive ? 'Drop files here' : 'Drag & drop files here'}
+            {disabled
+              ? (disabledReason || 'Uploads are currently disabled for this tool')
+              : (isDragActive ? 'Drop files here' : 'Drag & drop files here')}
           </p>
-          <p className="text-sm text-muted-cv">
-            or <span style={{ color }} className="font-medium">browse to upload</span>
-          </p>
+          {!disabled && (
+            <p className="text-sm text-muted-cv">
+              or <span style={{ color }} className="font-medium">browse to upload</span>
+            </p>
+          )}
         </div>
         {supportedFormats && supportedFormats.length > 0 && (
           <div className="flex flex-wrap items-center justify-center gap-1.5">
@@ -763,11 +772,15 @@ const OptionsPanel: React.FC<{
 // ────────────────────────────────────────────────
 export const ToolPage: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
-  const { isFavoriteTool, toggleFavoriteTool, addNotification, user } = useAppStore();
+  const { isFavoriteTool, toggleFavoriteTool, addNotification, user, siteDisplayConfig } = useAppStore();
 
   const tool = slug ? getToolBySlug(slug) : undefined;
   const dispatch = slug ? getToolDispatch(slug) : null;
   const implemented = slug ? hasProcessor(slug) : false;
+
+  const toolSetting = slug && siteDisplayConfig?.tools ? siteDisplayConfig.tools[slug] : undefined;
+  const isMaintenance = Boolean(siteDisplayConfig?.global?.maintenanceMode || toolSetting?.maintenance);
+  const isDisabled = toolSetting ? toolSetting.enabled === false : false;
 
   const [files, setFiles] = useState<ProcessingFile[]>([]);
   const [isRunning, setIsRunning] = useState(false);
@@ -814,6 +827,22 @@ export const ToolPage: React.FC = () => {
   }, [slug, dispatch?.optionFields]);
 
   const handleFiles = useCallback((acceptedFiles: File[]) => {
+    if (isDisabled) {
+      addNotification({
+        title: 'Tool Disabled',
+        desc: 'This tool is temporarily disabled by administrator.',
+        type: 'error',
+      });
+      return;
+    }
+    if (isMaintenance) {
+      addNotification({
+        title: 'Maintenance in Progress',
+        desc: 'This tool is currently undergoing maintenance. Processing is paused.',
+        type: 'info',
+      });
+      return;
+    }
     const newFiles = acceptedFiles.map((file) => ({
       id: Math.random().toString(36).slice(2),
       file,
@@ -821,7 +850,7 @@ export const ToolPage: React.FC = () => {
       progress: 0,
     }));
     setFiles((prev) => [...prev, ...newFiles]);
-  }, []);
+  }, [isDisabled, isMaintenance, addNotification]);
 
   const handleRemove = useCallback((id: string) => {
     setFiles((prev) => prev.filter((f) => f.id !== id));
@@ -837,6 +866,24 @@ export const ToolPage: React.FC = () => {
     inputFiles: ProcessingFile[],
     extraOpts: Record<string, unknown> = {}
   ) => {
+    if (isDisabled) {
+      addNotification({
+        title: 'Tool Disabled',
+        desc: 'This tool is temporarily disabled by administrator.',
+        type: 'error',
+      });
+      return;
+    }
+
+    if (isMaintenance) {
+      addNotification({
+        title: 'Maintenance in Progress',
+        desc: 'This tool is currently undergoing maintenance. Processing is paused.',
+        type: 'info',
+      });
+      return;
+    }
+
     if (accessRestricted) {
       addNotification({
         title: 'Premium Required',
@@ -1269,6 +1316,70 @@ export const ToolPage: React.FC = () => {
               </div>
             </div>
 
+            {/* Disabled Banner */}
+            {isDisabled && (
+              <div
+                className="p-5 rounded-2xl border mb-6 flex items-start gap-4 animate-slide-down"
+                style={{
+                  backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                  borderColor: 'rgba(239, 68, 68, 0.25)',
+                }}
+              >
+                <div
+                  className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{ backgroundColor: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}
+                >
+                  <AlertCircle size={20} />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="text-sm font-bold text-primary">Tool Temporarily Disabled</h3>
+                    <span className="badge text-2xs uppercase tracking-wider font-semibold" style={{ backgroundColor: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}>
+                      Admin Locked
+                    </span>
+                  </div>
+                  <p className="text-xs text-secondary leading-relaxed mb-3">
+                    This tool has been temporarily taken offline by the administrator for updates or configuration. Processing is temporarily disabled.
+                  </p>
+                  <Link
+                    to="/tools"
+                    className="btn-secondary btn-sm gap-1.5 font-bold text-xs inline-flex items-center"
+                  >
+                    <ArrowLeft size={13} /> Browse Other Tools
+                  </Link>
+                </div>
+              </div>
+            )}
+
+            {/* Maintenance Banner */}
+            {isMaintenance && !isDisabled && (
+              <div
+                className="p-5 rounded-2xl border mb-6 flex items-start gap-4 animate-slide-down"
+                style={{
+                  backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                  borderColor: 'rgba(245, 158, 11, 0.25)',
+                }}
+              >
+                <div
+                  className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{ backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}
+                >
+                  <RefreshCw size={20} className="animate-spin text-amber-500" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="text-sm font-bold text-primary">Scheduled Maintenance in Progress</h3>
+                    <span className="badge text-2xs uppercase tracking-wider font-semibold" style={{ backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
+                      Maintenance
+                    </span>
+                  </div>
+                  <p className="text-xs text-secondary leading-relaxed">
+                    This conversion module is currently undergoing planned maintenance to improve reliability and speed. Conversion queues are temporarily paused.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Premium Locked Banner */}
             {accessRestricted && (
               <div
@@ -1498,6 +1609,8 @@ export const ToolPage: React.FC = () => {
                       supportedFormats={tool.supportedInputFormats}
                       color={meta.color}
                       accept={acceptMap}
+                      disabled={isDisabled || isMaintenance}
+                      disabledReason={isDisabled ? 'Tool is temporarily disabled by administrator' : isMaintenance ? 'Tool is currently under scheduled maintenance' : undefined}
                     />
                   </>
                 )}

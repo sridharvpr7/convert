@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { SiteDisplayConfig } from '@/lib/api';
 
 // ============================================================
 // CONVETER — Global App Store (Zustand)
@@ -68,6 +69,10 @@ interface AppState {
   // Premium Configuration (from server)
   premiumConfig: PublicPremiumConfig | null;
   setPremiumConfig: (config: PublicPremiumConfig | null) => void;
+
+  // Site Display & Visibility Controls (from server)
+  siteDisplayConfig: SiteDisplayConfig | null;
+  setSiteDisplayConfig: (config: SiteDisplayConfig | null) => void;
 }
 
 export interface AppNotification {
@@ -177,6 +182,10 @@ export const useAppStore = create<AppState>()(
       // Premium Config
       premiumConfig: null,
       setPremiumConfig: (premiumConfig) => set({ premiumConfig }),
+
+      // Site Display Config
+      siteDisplayConfig: null,
+      setSiteDisplayConfig: (siteDisplayConfig) => set({ siteDisplayConfig }),
     }),
     {
       name: 'conveter-app',

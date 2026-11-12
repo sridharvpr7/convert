@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { handleApiRoute } from './routes.js';
 import { initializeAuth } from './auth.js';
 import { initializePremiumConfig } from './premium.js';
+import { initializeSiteDisplayConfig } from './site-display.js';
 import { telegramService } from './telegram.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,6 +23,7 @@ const DIST_DIR = path.resolve(__dirname, '../dist');
 let initialAdminPassword = null;
 try {
   initializePremiumConfig();
+  initializeSiteDisplayConfig();
   initialAdminPassword = await initializeAuth();
 } catch (err) {
   console.error('[Server Init Error]', err);

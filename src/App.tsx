@@ -355,20 +355,28 @@ const AppRoutes: React.FC = () => {
 // ─────────────────────────────────────────────────────────
 const App: React.FC = () => {
   const setUser = useAppStore((state) => state.setUser);
+  const setPremiumConfig = useAppStore((state) => state.setPremiumConfig);
+  const setSiteDisplayConfig = useAppStore((state) => state.setSiteDisplayConfig);
 
   useEffect(() => {
-    // Register visitor / user session for Telegram notifications
+    // 1. Fetch live configurations
+    apiClient.getPublicPremiumConfig().then(setPremiumConfig).catch(() => {});
+    apiClient.getPublicSiteConfig().then(setSiteDisplayConfig).catch(() => {});
+
+    // 2. Register visitor / user session
+    let anonymousId = localStorage.getItem('conveter_anon_id');
+    if (!anonymousId) {
+      anonymousId = `user_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      localStorage.setItem('conveter_anon_id', anonymousId);
+    }
+
     try {
-      let anonymousId = localStorage.getItem('conveter_anon_id');
-      if (!anonymousId) {
-        anonymousId = `user_${Date.now().toString(36)}`;
-        localStorage.setItem('conveter_anon_id', anonymousId);
-      }
       apiClient.registerUser({
         id: anonymousId,
         name: 'Anonymous User',
         deviceInfo: `${navigator.platform || 'Desktop'} · ${navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Desktop'}`,
       }).catch(() => {});
+      apiClient.pingVisitor(anonymousId, false).catch(() => {});
     } catch {
       /* ignore */
     }
@@ -387,9 +395,10 @@ const App: React.FC = () => {
           email: appUser.email,
           deviceInfo: `${navigator.platform || 'Desktop'}`,
         }).catch(() => {});
+        apiClient.pingVisitor(appUser.id, true, appUser.id).catch(() => {});
       }
     });
-  }, [setUser]);
+  }, [setUser, setPremiumConfig, setSiteDisplayConfig]);
 
   return (
     <QueryClientProvider client={queryClient}>

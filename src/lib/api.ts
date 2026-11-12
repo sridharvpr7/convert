@@ -58,10 +58,12 @@ export interface ApiNotificationLog {
 export interface ApiStats {
   totalJobs: number;
   completedJobs: number;
+  successfulConversions?: number;
   failedJobs: number;
   activeJobs: number;
   totalUsers: number;
   totalBytesSaved: number;
+  totalDataProcessedBytes?: number;
   successRate: number;
   totalProcessingDurationMs: number;
   avgProcessingTimeMs: number;
@@ -70,8 +72,36 @@ export interface ApiStats {
   monthCount: number;
   toolUsage: { tool_slug: string; tool_name: string; count: number; completed?: number; failed?: number }[];
   fileTypeDistribution: { format: string; count: number; percentage: number }[];
+  dailyTrends?: Array<{ date: string; label: string; completed: number; failed: number; total: number }>;
+  visitorStats?: {
+    totalVisitors: number;
+    authenticatedVisitors: number;
+    anonymousVisitors: number;
+    totalPageViews: number;
+    returningVisitors: number;
+  };
+  premiumStats?: {
+    activeAccounts: number;
+    expiredAccounts: number;
+    revokedAccounts: number;
+    totalVerifiedRevenue: number;
+  };
+  telegramStats?: {
+    total: number;
+    sent: number;
+    failed: number;
+    mocked: number;
+    deliverySuccessRate: number;
+  };
+  timezone?: string;
+  systemHealth?: {
+    application: string;
+    database: string;
+    storage: string;
+  };
   recentActivity: Array<{
     id: string;
+    jobId?: string;
     toolName: string;
     toolSlug: string;
     inputFileName: string;
@@ -86,6 +116,71 @@ export interface ApiStats {
     completedAt?: string;
   }>;
   timeRange?: string;
+}
+
+export interface ToolDisplaySetting {
+  name: string;
+  category: string;
+  visible: boolean;
+  enabled: boolean;
+  tier: 'free' | 'premium';
+  featured: boolean;
+  maintenance: boolean;
+}
+
+export interface SiteDisplayConfig {
+  version: string;
+  lastModified: string;
+  global: {
+    maintenanceMode: boolean;
+    showAnnouncementBar: boolean;
+    announcementText: string;
+    showHeader: boolean;
+    showFooter: boolean;
+  };
+  navigation: {
+    showHome: boolean;
+    showTools: boolean;
+    showDashboard: boolean;
+    showPricing: boolean;
+    showPremium: boolean;
+    showAbout: boolean;
+    showContact: boolean;
+  };
+  homepage: {
+    showHero: boolean;
+    showStatistics: boolean;
+    showFeaturedTools: boolean;
+    showCategories: boolean;
+    showHowItWorks: boolean;
+    showFeatures: boolean;
+    showTestimonials: boolean;
+    showPricing: boolean;
+    showCTA: boolean;
+  };
+  features: {
+    showSearch: boolean;
+    showFileUpload: boolean;
+    showDragAndDrop: boolean;
+    showLiveAnalytics: boolean;
+    showRecentActivity: boolean;
+    showVisitorCounter: boolean;
+    showThemeToggle: boolean;
+  };
+  pricing: {
+    showPricingPage: boolean;
+    showFreePlan: boolean;
+    showPremiumPlan: boolean;
+    showPrices: boolean;
+    showUpgradeButtons: boolean;
+  };
+  branding: {
+    showLogo: boolean;
+    showSocialLinks: boolean;
+    showCopyright: boolean;
+  };
+  categories: Record<string, { name: string; visible: boolean }>;
+  tools: Record<string, ToolDisplaySetting>;
 }
 
 export interface NotificationSettings {
@@ -472,5 +567,76 @@ export const apiClient = {
       method: 'POST',
     });
     return res ? res.result : null;
+  },
+
+  /**
+   * Site Display Controls (Public & Admin)
+   */
+  async getPublicSiteConfig(): Promise<SiteDisplayConfig | null> {
+    const res = await safeFetch<{ config: SiteDisplayConfig }>('/api/site-config/public');
+    return res ? res.config : null;
+  },
+
+  async getAdminSiteConfig(): Promise<SiteDisplayConfig | null> {
+    const res = await safeFetch<{ config: SiteDisplayConfig }>('/api/admin/site-config');
+    return res ? res.config : null;
+  },
+
+  async updateAdminSiteConfig(config: Partial<SiteDisplayConfig>): Promise<{ ok: boolean; config?: SiteDisplayConfig; error?: string }> {
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/site-config`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, error: data.error || 'Failed to update display settings' };
+      }
+      return { ok: true, config: data.config };
+    } catch {
+      return { ok: false, error: 'Network error saving display settings' };
+    }
+  },
+
+  async resetAdminSiteConfig(): Promise<{ ok: boolean; config?: SiteDisplayConfig; error?: string }> {
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/site-config/reset`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, error: data.error || 'Failed to reset display settings' };
+      }
+      return { ok: true, config: data.config };
+    } catch {
+      return { ok: false, error: 'Network error resetting display settings' };
+    }
+  },
+
+  /**
+   * Live Analytics Summary (Sanitized for UI Dashboard)
+   */
+  async getAnalyticsSummary(range: string = 'all'): Promise<ApiStats | null> {
+    const res = await safeFetch<{ summary: ApiStats }>(`/api/analytics/summary?range=${encodeURIComponent(range)}`);
+    return res ? res.summary : null;
+  },
+
+  /**
+   * Privacy-respecting Visitor Session Ping
+   */
+  async pingVisitor(visitorId: string, isAuthenticated: boolean = false, userId?: string): Promise<void> {
+    try {
+      await fetch(`${API_BASE}/api/visitors/ping`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visitorId, isAuthenticated, userId }),
+      });
+    } catch {
+      // safe ignore
+    }
   },
 };
