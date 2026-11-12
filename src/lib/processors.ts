@@ -21,6 +21,16 @@ export class ProcessorError extends Error {
   }
 }
 
+/**
+ * Safely converts a Uint8Array into a newly allocated ArrayBuffer BlobPart
+ * to ensure strict cross-platform Blob compatibility across all TypeScript versions.
+ */
+export function toBlobPart(bytes: Uint8Array): BlobPart {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
 // ─────────────────────────────────────────────────────────
 // Image Processing (Canvas API — no external dependencies)
 // ─────────────────────────────────────────────────────────
@@ -187,7 +197,7 @@ export async function imagesToPdf(files: File[]): Promise<ProcessorResult> {
   }
 
   const pdfBytes = await pdfDoc.save();
-  const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+  const blob = new Blob([toBlobPart(pdfBytes)], { type: 'application/pdf' });
   const baseName = files[0].name.replace(/\.[^.]+$/, '');
 
   return {
@@ -215,7 +225,7 @@ export async function mergePdfs(files: File[]): Promise<ProcessorResult> {
   }
 
   const pdfBytes = await mergedPdf.save();
-  const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+  const blob = new Blob([toBlobPart(pdfBytes)], { type: 'application/pdf' });
 
   return {
     blob,
@@ -244,7 +254,7 @@ export async function splitPdf(
       const [page] = await newPdf.copyPages(srcPdf, [i]);
       newPdf.addPage(page);
       const bytes = await newPdf.save();
-      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const blob = new Blob([toBlobPart(bytes)], { type: 'application/pdf' });
       results.push({
         blob,
         filename: `${baseName}_page_${i + 1}.pdf`,
@@ -261,7 +271,7 @@ export async function splitPdf(
       const pages = await newPdf.copyPages(srcPdf, indices);
       pages.forEach((p) => newPdf.addPage(p));
       const bytes = await newPdf.save();
-      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const blob = new Blob([toBlobPart(bytes)], { type: 'application/pdf' });
       results.push({
         blob,
         filename: `${baseName}_pages_${range.from}-${range.to}.pdf`,
@@ -292,7 +302,7 @@ export async function rotatePdf(
   }
 
   const pdfBytes = await pdfDoc.save();
-  const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+  const blob = new Blob([toBlobPart(pdfBytes)], { type: 'application/pdf' });
   const baseName = file.name.replace(/\.pdf$/i, '');
 
   return {
@@ -331,7 +341,7 @@ export async function watermarkPdf(
   }
 
   const pdfBytes = await pdfDoc.save();
-  const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+  const blob = new Blob([toBlobPart(pdfBytes)], { type: 'application/pdf' });
   const baseName = file.name.replace(/\.pdf$/i, '');
 
   return {

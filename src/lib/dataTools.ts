@@ -1,11 +1,12 @@
 import * as XLSX from 'xlsx';
 import type { ProcessorResult } from './processors';
-import { ProcessorError } from './processors';
+import { ProcessorError, toBlobPart } from './processors';
 
 function excelResult(workbook: XLSX.WorkBook, filename: string): ProcessorResult {
   const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+  const blobPart = bytes instanceof Uint8Array ? toBlobPart(bytes) : bytes;
   return {
-    blob: new Blob([bytes], {
+    blob: new Blob([blobPart], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     }),
     filename,
