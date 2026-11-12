@@ -59,6 +59,21 @@ function ensureConfigDir() {
 
 function loadAdminConfig() {
   ensureConfigDir();
+
+  // 1. Try persistent disk path first if DATA_DIR is configured (Render persistent disk)
+  if (process.env.DATA_DIR) {
+    const persistentPath = path.join(process.env.DATA_DIR, 'config', 'admin.json');
+    if (fs.existsSync(persistentPath)) {
+      try {
+        adminConfig = JSON.parse(fs.readFileSync(persistentPath, 'utf8'));
+        return false;
+      } catch (err) {
+        console.error('[Auth] Failed to parse persistent admin.json:', err.message);
+      }
+    }
+  }
+
+  // 2. Fall back to application CONFIG_DIR
   if (fs.existsSync(ADMIN_CONFIG_PATH)) {
     try {
       adminConfig = JSON.parse(fs.readFileSync(ADMIN_CONFIG_PATH, 'utf8'));
@@ -77,6 +92,19 @@ function saveAdminConfig() {
   } catch (err) {
     console.warn('[Auth] Failed to persist admin.json (ephemeral FS?):', err.message);
     // Continue with in-memory config
+  }
+
+  // Also persist to Render Persistent Disk if DATA_DIR is configured
+  if (process.env.DATA_DIR) {
+    try {
+      const persistentDir = path.join(process.env.DATA_DIR, 'config');
+      if (!fs.existsSync(persistentDir)) {
+        fs.mkdirSync(persistentDir, { recursive: true });
+      }
+      fs.writeFileSync(path.join(persistentDir, 'admin.json'), JSON.stringify(adminConfig, null, 2), 'utf8');
+    } catch (err) {
+      console.warn('[Auth] Failed to persist admin.json to DATA_DIR:', err.message);
+    }
   }
 }
 
