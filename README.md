@@ -39,7 +39,7 @@ The Firebase web configuration is public client configuration. Do not place serv
 Create a **Static Site** from the GitHub repository:
 
 - Root Directory: blank (the repository root)
-- Build Command: `npm install && npm run build`
+- Build Command: `npm install --include=dev && npm run build`
 - Publish Directory: `dist`
 
 Add a rewrite rule in the Static Site's **Redirects/Rewrites** settings for React Router:
