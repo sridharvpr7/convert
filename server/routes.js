@@ -516,15 +516,42 @@ export async function handleApiRoute(req, res, url) {
       return sendJson(400, { error: 'Job id is required' });
     }
 
+    const existingJob = db.getJobById(body.id);
+    if (!existingJob) {
+      return sendJson(404, { error: 'Job not found' });
+    }
+
+    // Verify ownership via job token
+    const clientToken = body.jobToken || body.job_token || body.token;
+    if (existingJob.job_token) {
+      if (!clientToken || clientToken !== existingJob.job_token) {
+        return sendJson(403, { error: 'Unauthorized: Invalid or missing job token' });
+      }
+    }
+
+    // Prevent duplicate updates or invalid state transitions
+    if (['completed', 'failed', 'cancelled'].includes(existingJob.status)) {
+      return sendJson(409, {
+        error: `Job is already in a terminal state (${existingJob.status})`,
+        job: existingJob,
+      });
+    }
+
+    // Verify valid output file was generated
+    const outputFileName = (body.outputFileName || '').trim();
+    if (!outputFileName) {
+      return sendJson(400, { error: 'outputFileName is required for completed conversions' });
+    }
+
     const nowIso = new Date().toISOString();
     const updated = db.updateJob(body.id, {
       status: 'completed',
-      output_file_name: body.outputFileName || null,
-      output_file_size: body.outputFileSize || 0,
-      output_format: body.outputFormat || null,
-      file_size_bytes: body.fileSizeBytes || body.outputFileSize || 0,
-      duration_ms: body.durationMs || 0,
-      processing_duration_ms: body.durationMs || 0,
+      output_file_name: outputFileName,
+      output_file_size: Math.max(0, parseInt(body.outputFileSize, 10) || 0),
+      output_format: (body.outputFormat || '').trim() || null,
+      file_size_bytes: Math.max(0, parseInt(body.fileSizeBytes || body.outputFileSize, 10) || 0),
+      duration_ms: Math.max(0, parseInt(body.durationMs, 10) || 0),
+      processing_duration_ms: Math.max(0, parseInt(body.durationMs, 10) || 0),
       processing_completed_at: nowIso,
       completed_at: nowIso,
     });
@@ -544,13 +571,34 @@ export async function handleApiRoute(req, res, url) {
       return sendJson(400, { error: 'Job id is required' });
     }
 
+    const existingJob = db.getJobById(body.id);
+    if (!existingJob) {
+      return sendJson(404, { error: 'Job not found' });
+    }
+
+    // Verify ownership via job token
+    const clientToken = body.jobToken || body.job_token || body.token;
+    if (existingJob.job_token) {
+      if (!clientToken || clientToken !== existingJob.job_token) {
+        return sendJson(403, { error: 'Unauthorized: Invalid or missing job token' });
+      }
+    }
+
+    // Prevent duplicate updates or overriding a completed job
+    if (['completed', 'failed', 'cancelled'].includes(existingJob.status)) {
+      return sendJson(409, {
+        error: `Job is already in a terminal state (${existingJob.status})`,
+        job: existingJob,
+      });
+    }
+
     const nowIso = new Date().toISOString();
     const updated = db.updateJob(body.id, {
       status: 'failed',
-      duration_ms: body.durationMs || 0,
-      processing_duration_ms: body.durationMs || 0,
+      duration_ms: Math.max(0, parseInt(body.durationMs, 10) || 0),
+      processing_duration_ms: Math.max(0, parseInt(body.durationMs, 10) || 0),
       error_code: body.errorCode || 'CONVERSION_FAILED',
-      error_summary: body.errorSummary || 'Processing failed',
+      error_summary: (body.errorSummary || 'Processing failed').slice(0, 500),
       processing_completed_at: nowIso,
       completed_at: nowIso,
     });
@@ -568,6 +616,7 @@ export async function handleApiRoute(req, res, url) {
   }
 
   if (pathname === '/api/jobs' && method === 'GET') {
+    const isAdmin = Boolean(requireAdmin(req));
     const status = url.searchParams.get('status') || 'all';
     const toolSlug = url.searchParams.get('tool') || 'all';
     const timeRange = url.searchParams.get('range') || 'all';
@@ -575,8 +624,16 @@ export async function handleApiRoute(req, res, url) {
     const limit = parseInt(url.searchParams.get('limit') || '50', 10);
     const offset = parseInt(url.searchParams.get('offset') || '0', 10);
 
-    const jobs = db.listJobs({ status, toolSlug, search, limit, offset, timeRange });
+    let jobs = db.listJobs({ status, toolSlug, search, limit, offset, timeRange });
     const totalCount = db.countJobs({ status, toolSlug, search, timeRange });
+
+    // Sanitize sensitive tokens and email for non-admin requests
+    if (!isAdmin) {
+      jobs = jobs.map((j) => {
+        const { job_token, download_token, user_email, ...safe } = j;
+        return safe;
+      });
+    }
 
     return sendJson(200, {
       jobs,

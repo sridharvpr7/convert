@@ -507,6 +507,107 @@ async function runTests() {
     assert(!isNaN(new Date(cutoffs.today).getTime()));
   });
 
+  // ── 6. Security & Data Integrity Audit Verification ─────────
+  console.log('\n--- 6. Security & Data Integrity Audit ---');
+
+  let secureJob = null;
+  await testAsync('Security: Start job generates secure server-side job_token', async () => {
+    const mock = mockRequest('POST', '/api/jobs/start', {
+      toolSlug: 'split-pdf',
+      toolName: 'Split PDF',
+      inputFileName: 'contract.pdf',
+      inputFileSize: 1048576,
+    });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/jobs/start'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 201);
+    assert(result.data.job.id);
+    assert(result.data.job.job_token, 'Server must issue secure job_token');
+    secureJob = result.data.job;
+  });
+
+  await testAsync('Security: Forged /api/jobs/complete with invalid token is blocked with 403', async () => {
+    const mock = mockRequest('POST', '/api/jobs/complete', {
+      id: secureJob.id,
+      jobToken: 'forged_fake_token_12345',
+      outputFileName: 'contract_page_1.pdf',
+      outputFileSize: 524288,
+    });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/jobs/complete'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 403);
+    assert(result.data.error.includes('Invalid or missing job token'));
+  });
+
+  await testAsync('Data Integrity: /api/jobs/complete without outputFileName is rejected with 400', async () => {
+    const mock = mockRequest('POST', '/api/jobs/complete', {
+      id: secureJob.id,
+      jobToken: secureJob.job_token,
+      outputFileName: '   ',
+      outputFileSize: 0,
+    });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/jobs/complete'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 400);
+  });
+
+  await testAsync('Security: Authorized /api/jobs/complete succeeds with valid token', async () => {
+    const mock = mockRequest('POST', '/api/jobs/complete', {
+      id: secureJob.id,
+      jobToken: secureJob.job_token,
+      outputFileName: 'contract_page_1.pdf',
+      outputFileSize: 524288,
+      durationMs: 450,
+    });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/jobs/complete'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 200);
+    assert.strictEqual(result.data.job.status, 'completed');
+  });
+
+  await testAsync('Data Integrity: Duplicate completion on terminal job is rejected with 409', async () => {
+    const mock = mockRequest('POST', '/api/jobs/complete', {
+      id: secureJob.id,
+      jobToken: secureJob.job_token,
+      outputFileName: 'contract_page_duplicate.pdf',
+      outputFileSize: 524288,
+    });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/jobs/complete'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 409);
+    assert(result.data.error.includes('terminal state'));
+  });
+
+  await testAsync('Data Integrity: Failing an already-completed job is rejected with 409', async () => {
+    const mock = mockRequest('POST', '/api/jobs/fail', {
+      id: secureJob.id,
+      jobToken: secureJob.job_token,
+      errorSummary: 'Attempt to fail completed job',
+    });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/jobs/fail'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 409);
+  });
+
+  await testAsync('Privacy: GET /api/jobs for non-admin omits job_token, download_token, and email', async () => {
+    const mock = mockRequest('GET', '/api/jobs');
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/jobs'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 200);
+    assert(result.data.jobs.length > 0);
+    for (const j of result.data.jobs) {
+      assert.strictEqual(j.job_token, undefined, 'Public jobs list must not expose job_token');
+      assert.strictEqual(j.download_token, undefined, 'Public jobs list must not expose download_token');
+      assert.strictEqual(j.user_email, undefined, 'Public jobs list must not expose user_email');
+    }
+  });
+
+  await testAsync('Telegram: Notification stats accurately identify live vs mock delivery mode', async () => {
+    const stats = db.getNotificationStats();
+    assert(stats.deliveryMode === 'mock' || stats.deliveryMode === 'live');
+    assert(typeof stats.deliverySuccessRate === 'number');
+  });
+
   // Summary
   console.log('\n========================================');
   console.log(`QA RESULTS: ${passed} passed, ${failed} failed`);

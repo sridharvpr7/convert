@@ -2,15 +2,21 @@ services:
   - type: web
     name: convetpulse
     env: node
-    plan: free
+    plan: starter
     buildCommand: npm install && npm run build
     startCommand: node server/index.js
     healthCheckPath: /api/health
+    disk:
+      name: conveter-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 10000
+      - key: DATA_DIR
+        value: /data
       - key: APP_URL
         value: https://convetpulse.onrender.com
       - key: TELEGRAM_BOT_TOKEN

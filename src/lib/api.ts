@@ -18,6 +18,8 @@ export interface ApiJob {
   outputFileSize?: number;
   outputFormat?: string;
   status: 'started' | 'completed' | 'failed' | 'cancelled';
+  job_token?: string;
+  jobToken?: string;
   durationMs?: number;
   errorSummary?: string;
   errorCategory?: string;
@@ -432,6 +434,7 @@ export const apiClient = {
    */
   async completeJob(params: {
     id: string;
+    jobToken?: string;
     outputFileName: string;
     outputFileSize: number;
     outputFormat: string;
@@ -449,9 +452,11 @@ export const apiClient = {
    */
   async failJob(params: {
     id: string;
+    jobToken?: string;
     durationMs: number;
     errorSummary: string;
     errorCategory?: string;
+    errorCode?: string;
   }): Promise<ApiJob | null> {
     const res = await safeFetch<{ job: ApiJob }>('/api/jobs/fail', {
       method: 'POST',

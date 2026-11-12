@@ -912,7 +912,7 @@ export const ToolPage: React.FC = () => {
 
       // Notify backend & Telegram that conversion started
       const totalSize = fileList.reduce((acc, f) => acc + f.size, 0);
-      let startedJob: { id: string } | null = null;
+      let startedJob: { id: string; job_token?: string; jobToken?: string } | null = null;
       try {
         startedJob = await apiClient.startJob({
           toolSlug: tool!.slug,
@@ -946,6 +946,7 @@ export const ToolPage: React.FC = () => {
         if (startedJob?.id && results[0]) {
           apiClient.completeJob({
             id: startedJob.id,
+            jobToken: startedJob.job_token || (startedJob as any).jobToken,
             outputFileName: results[0].filename,
             outputFileSize: results[0].blob.size,
             outputFormat: results[0].filename.split('.').pop() || '',
@@ -977,6 +978,7 @@ export const ToolPage: React.FC = () => {
         if (startedJob?.id) {
           apiClient.failJob({
             id: startedJob.id,
+            jobToken: startedJob.job_token || (startedJob as any).jobToken,
             durationMs,
             errorSummary: msg,
           }).catch(() => {});
@@ -1003,7 +1005,7 @@ export const ToolPage: React.FC = () => {
         setFiles((prev) => prev.map((f) => f.id === pf.id ? { ...f, state: 'processing', progress: 10 } : f));
         const startTime = Date.now();
 
-        let startedJob: { id: string } | null = null;
+        let startedJob: { id: string; job_token?: string; jobToken?: string } | null = null;
         try {
           startedJob = await apiClient.startJob({
             toolSlug: tool!.slug,
@@ -1037,6 +1039,7 @@ export const ToolPage: React.FC = () => {
           if (startedJob?.id && primaryRes) {
             apiClient.completeJob({
               id: startedJob.id,
+              jobToken: startedJob.job_token || (startedJob as any).jobToken,
               outputFileName: primaryRes.filename,
               outputFileSize: primaryRes.blob.size,
               outputFormat: primaryRes.filename.split('.').pop() || '',
@@ -1079,6 +1082,7 @@ export const ToolPage: React.FC = () => {
           if (startedJob?.id) {
             apiClient.failJob({
               id: startedJob.id,
+              jobToken: startedJob.job_token || (startedJob as any).jobToken,
               durationMs,
               errorSummary: msg,
             }).catch(() => {});

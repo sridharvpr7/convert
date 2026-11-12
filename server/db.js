@@ -12,12 +12,17 @@ import crypto from 'node:crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_DIR = path.resolve(__dirname, '../data');
+const DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../data');
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const DB_PATH = path.join(DATA_DIR, 'conveter.db');
+// Prefer conveter.sqlite, fall back to conveter.db if present
+let defaultDbPath = path.join(DATA_DIR, 'conveter.sqlite');
+if (!fs.existsSync(defaultDbPath) && fs.existsSync(path.join(DATA_DIR, 'conveter.db'))) {
+  defaultDbPath = path.join(DATA_DIR, 'conveter.db');
+}
+const DB_PATH = process.env.DATABASE_PATH || defaultDbPath;
 const JSON_FALLBACK_PATH = path.join(DATA_DIR, 'conveter_store.json');
 
 // Check if node:sqlite is available
@@ -40,6 +45,7 @@ function initSqliteTables(db) {
     CREATE TABLE IF NOT EXISTS jobs (
       id TEXT PRIMARY KEY,
       job_id TEXT,
+      job_token TEXT,
       tool_id TEXT,
       tool_slug TEXT NOT NULL,
       tool_name TEXT NOT NULL,
@@ -143,6 +149,7 @@ function initSqliteTables(db) {
   };
 
   runMigration('ALTER TABLE jobs ADD COLUMN job_id TEXT');
+  runMigration('ALTER TABLE jobs ADD COLUMN job_token TEXT');
   runMigration('ALTER TABLE jobs ADD COLUMN tool_id TEXT');
   runMigration('ALTER TABLE jobs ADD COLUMN file_size_bytes INTEGER DEFAULT 0');
   runMigration('ALTER TABLE jobs ADD COLUMN processing_started_at TEXT');
@@ -277,6 +284,7 @@ export const db = {
     const record = {
       id,
       job_id: id,
+      job_token: job.job_token || job.jobToken || crypto.randomBytes(24).toString('hex'),
       tool_id: job.toolSlug || job.toolId,
       tool_slug: job.toolSlug || job.toolId,
       tool_name: job.toolName || job.toolSlug,
@@ -306,7 +314,7 @@ export const db = {
     if (sqliteDb) {
       const stmt = sqliteDb.prepare(`
         INSERT INTO jobs (
-          id, job_id, tool_id, tool_slug, tool_name,
+          id, job_id, job_token, tool_id, tool_slug, tool_name,
           user_id, user_name, user_email,
           input_file_name, input_file_size, file_size_bytes, input_format,
           output_file_name, output_file_size, output_format,
@@ -314,7 +322,7 @@ export const db = {
           processing_duration_ms, duration_ms, error_code, error_summary,
           download_token, download_count, created_at, completed_at
         ) VALUES (
-          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
           ?, ?, ?,
           ?, ?, ?, ?,
           ?, ?, ?,
@@ -324,7 +332,7 @@ export const db = {
         )
       `);
       stmt.run(
-        record.id, record.job_id, record.tool_id, record.tool_slug, record.tool_name,
+        record.id, record.job_id, record.job_token, record.tool_id, record.tool_slug, record.tool_name,
         record.user_id, record.user_name, record.user_email,
         record.input_file_name, record.input_file_size, record.file_size_bytes, record.input_format,
         record.output_file_name, record.output_file_size, record.output_format,
@@ -783,21 +791,24 @@ export const db = {
   },
 
   getNotificationStats() {
+    const isLiveConfigured = Boolean(process.env.TELEGRAM_BOT_TOKEN);
     if (sqliteDb) {
       const total = sqliteDb.prepare('SELECT COUNT(*) as total FROM notification_logs').get()?.total || 0;
       const sent = sqliteDb.prepare("SELECT COUNT(*) as total FROM notification_logs WHERE status IN ('sent', 'retried')").get()?.total || 0;
       const failed = sqliteDb.prepare("SELECT COUNT(*) as total FROM notification_logs WHERE status = 'failed'").get()?.total || 0;
       const mocked = sqliteDb.prepare("SELECT COUNT(*) as total FROM notification_logs WHERE status = 'mocked'").get()?.total || 0;
-      const rate = total > 0 ? Math.round((sent / total) * 100) : 100;
-      return { total, sent, failed, mocked, deliverySuccessRate: rate };
+      const liveAttempts = sent + failed;
+      const rate = liveAttempts > 0 ? Math.round((sent / liveAttempts) * 100) : (total > 0 && mocked > 0 ? 0 : 0);
+      return { total, sent, failed, mocked, liveAttempts, deliverySuccessRate: rate, deliveryMode: isLiveConfigured ? 'live' : 'mock' };
     } else {
       const logs = jsonStore.notification_logs || [];
       const total = logs.length;
       const sent = logs.filter((l) => l.status === 'sent' || l.status === 'retried').length;
       const failed = logs.filter((l) => l.status === 'failed').length;
       const mocked = logs.filter((l) => l.status === 'mocked').length;
-      const rate = total > 0 ? Math.round((sent / total) * 100) : 100;
-      return { total, sent, failed, mocked, deliverySuccessRate: rate };
+      const liveAttempts = sent + failed;
+      const rate = liveAttempts > 0 ? Math.round((sent / liveAttempts) * 100) : (total > 0 && mocked > 0 ? 0 : 0);
+      return { total, sent, failed, mocked, liveAttempts, deliverySuccessRate: rate, deliveryMode: isLiveConfigured ? 'live' : 'mock' };
     }
   },
 
@@ -880,10 +891,13 @@ export const db = {
     }
 
     // Accurate calculation of metrics:
+    // Helper: genuine completed conversion must have status 'completed' and valid output file
+    const isGenuineCompleted = (j) => j.status === 'completed' && Boolean(j.output_file_name && String(j.output_file_name).trim().length > 0);
+
     // 1. Total Completed Jobs
     const completedJobs = allFilteredJobs.filter((j) => j.status === 'completed').length;
-    // 2. Successful Conversions (synonym for verified completed jobs)
-    const successfulConversions = completedJobs;
+    // 2. Successful Conversions (verified completed conversions with valid output file)
+    const successfulConversions = allFilteredJobs.filter(isGenuineCompleted).length;
     // 3. Failed Conversions
     const failedJobs = allFilteredJobs.filter((j) => j.status === 'failed').length;
     // 4. Active conversions in progress
@@ -891,8 +905,8 @@ export const db = {
     const totalJobs = allFilteredJobs.length;
 
     // 5. Success Rate: (Successful / (Successful + Failed)) * 100. If 0 finished jobs, display 0
-    const finishedJobs = completedJobs + failedJobs;
-    const successRate = finishedJobs > 0 ? Math.round((completedJobs / finishedJobs) * 100) : 0;
+    const finishedJobs = successfulConversions + failedJobs;
+    const successRate = finishedJobs > 0 ? Math.round((successfulConversions / finishedJobs) * 100) : 0;
 
     // 6. Processing Time: Total and Average of verified completed jobs
     const totalProcessingDurationMs = allFilteredJobs.reduce((acc, j) => {
@@ -900,11 +914,13 @@ export const db = {
       if (j.status === 'completed' && dur > 0) return acc + dur;
       return acc;
     }, 0);
-    const avgProcessingTimeMs = completedJobs > 0 ? Math.round(totalProcessingDurationMs / completedJobs) : 0;
+    const avgProcessingTimeMs = successfulConversions > 0
+      ? Math.round(totalProcessingDurationMs / successfulConversions)
+      : (completedJobs > 0 ? Math.round(totalProcessingDurationMs / completedJobs) : 0);
 
     // 7. Total Data Processed: sum of file_size_bytes or input_file_size for verified completed jobs
     const totalDataProcessedBytes = allFilteredJobs.reduce((acc, j) => {
-      if (j.status === 'completed') {
+      if (j.status === 'completed' && isGenuineCompleted(j)) {
         const size = j.file_size_bytes || j.input_file_size || 0;
         return acc + size;
       }
@@ -924,13 +940,13 @@ export const db = {
     // 9. Period counts in Asia/Kolkata (independent of user timeRange filter)
     let jobsAllTime = [];
     if (sqliteDb) {
-      jobsAllTime = sqliteDb.prepare('SELECT created_at, status FROM jobs').all();
+      jobsAllTime = sqliteDb.prepare('SELECT created_at, status, output_file_name FROM jobs').all();
     } else {
       jobsAllTime = jsonStore.jobs;
     }
-    const todayCount = jobsAllTime.filter((j) => j.created_at >= todayIso && j.status === 'completed').length;
-    const weekCount = jobsAllTime.filter((j) => j.created_at >= weekIso && j.status === 'completed').length;
-    const monthCount = jobsAllTime.filter((j) => j.created_at >= monthIso && j.status === 'completed').length;
+    const todayCount = jobsAllTime.filter((j) => j.created_at >= todayIso && isGenuineCompleted(j)).length;
+    const weekCount = jobsAllTime.filter((j) => j.created_at >= weekIso && isGenuineCompleted(j)).length;
+    const monthCount = jobsAllTime.filter((j) => j.created_at >= monthIso && isGenuineCompleted(j)).length;
 
     // 10. Most used conversion tools breakdown
     const usageMap = {};
