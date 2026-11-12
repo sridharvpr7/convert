@@ -7,6 +7,20 @@ import { persist } from 'zustand/middleware';
 
 export type Theme = 'light' | 'dark' | 'system';
 
+export interface PublicPremiumConfig {
+  enabled: boolean;
+  showPremiumButton: boolean;
+  price: {
+    amount: number;
+    currency: string;
+    billingPeriod: string;
+    label: string;
+  };
+  features: Record<string, boolean>;
+  allowedTools: string[];
+  maintenanceMode: boolean;
+}
+
 interface AppState {
   // Theme
   theme: Theme;
@@ -44,6 +58,16 @@ interface AppState {
   favoriteTools: string[]; // tool slugs
   toggleFavoriteTool: (slug: string) => void;
   isFavoriteTool: (slug: string) => boolean;
+
+  // Admin Authentication State
+  adminAuthenticated: boolean;
+  setAdminAuthenticated: (val: boolean) => void;
+  mustChangePassword: boolean;
+  setMustChangePassword: (val: boolean) => void;
+
+  // Premium Configuration (from server)
+  premiumConfig: PublicPremiumConfig | null;
+  setPremiumConfig: (config: PublicPremiumConfig | null) => void;
 }
 
 export interface AppNotification {
@@ -143,6 +167,16 @@ export const useAppStore = create<AppState>()(
         });
       },
       isFavoriteTool: (slug) => get().favoriteTools.includes(slug),
+
+      // Admin Auth
+      adminAuthenticated: false,
+      setAdminAuthenticated: (adminAuthenticated) => set({ adminAuthenticated }),
+      mustChangePassword: false,
+      setMustChangePassword: (mustChangePassword) => set({ mustChangePassword }),
+
+      // Premium Config
+      premiumConfig: null,
+      setPremiumConfig: (premiumConfig) => set({ premiumConfig }),
     }),
     {
       name: 'conveter-app',

@@ -1,10 +1,9 @@
 // ============================================================
-// CONVETER — Premium Dashboard Redesign (Section 2)
-// Linear / Vercel SaaS style dashboard with:
+// CONVETER — Premium Dashboard (Section 2)
+// SaaS style dashboard with:
+// - Real metrics & analytics with date range filters
 // - Personalized welcome & system telemetry
 // - Quick Upload section with smart file-type auto-detection
-// - Quick action shortcuts for instant conversion
-// - Conversion statistics & space saved
 // - All 17 tools organized by category with search
 // - Recent activity list with status badges & direct actions
 // ============================================================
@@ -15,7 +14,7 @@ import { useDropzone } from 'react-dropzone';
 import {
   Sparkles, Upload, FileText, Clock, Zap,
   ArrowRight, Plus, WifiOff, ShieldCheck, CheckCircle2,
-  Search, ChevronRight,
+  Search, ChevronRight, RefreshCw, BarChart2, Calendar,
 } from 'lucide-react';
 import { TOOLS, CATEGORY_META, ToolCategory } from '@/registry/tools';
 import { HistoryItem, loadHistory } from '@/lib/history';
@@ -28,17 +27,29 @@ export const DashboardPage: React.FC = () => {
 
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [stats, setStats] = useState<ApiStats | null>(null);
+  const [timeRange, setTimeRange] = useState<string>('all');
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [toolSearch, setToolSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
 
+  const fetchStats = useCallback(async (range: string) => {
+    setIsRefreshing(true);
+    try {
+      const res = await apiClient.getAdminStats(range);
+      if (res) setStats(res);
+    } catch {
+      // offline / mock fallback
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, []);
+
   // Load history and stats
   useEffect(() => {
     setHistory(loadHistory());
-    apiClient.getAdminStats().then((res) => {
-      if (res) setStats(res);
-    });
-  }, []);
+    fetchStats(timeRange);
+  }, [fetchStats, timeRange]);
 
   // Smart tool detector based on dropped file extension
   const detectedTool = useMemo(() => {
@@ -106,9 +117,16 @@ export const DashboardPage: React.FC = () => {
     { name: 'Extract ZIP', slug: 'zip-extractor', category: 'archive', icon: 'Archive' },
   ];
 
-  const totalCount = stats?.totalJobs || history.length;
-  const successCount = stats?.completedJobs || history.filter((h) => h.status === 'completed').length;
-  const successRate = totalCount > 0 ? Math.round((successCount / totalCount) * 100) : 100;
+  // Genuine Statistics Calculations according to exact rules:
+  // - Files Processed = Actual completed processing jobs
+  // - Success Rate = (Successful / (Successful + Failed)) * 100
+  // - Avg Processing Time = Total duration / Completed jobs
+  // Display 0 when no data
+  const totalCompleted = stats?.completedJobs ?? history.filter((h) => h.status === 'completed').length;
+  const totalFailed = stats?.failedJobs ?? history.filter((h) => h.status === 'failed').length;
+  const finishedTotal = totalCompleted + totalFailed;
+  const calculatedSuccessRate = finishedTotal > 0 ? Math.round((totalCompleted / finishedTotal) * 100) : 0;
+  const avgDurationSec = stats?.avgProcessingTimeMs ? (stats.avgProcessingTimeMs / 1000).toFixed(1) : '0.0';
 
   return (
     <div className="pt-20 pb-20 min-h-screen" style={{ backgroundColor: 'var(--bg)' }}>
@@ -122,7 +140,6 @@ export const DashboardPage: React.FC = () => {
             background: 'linear-gradient(135deg, var(--card) 0%, var(--surface) 100%)',
           }}
         >
-          {/* Subtle gradient glow */}
           <div
             className="absolute top-0 right-0 w-96 h-96 opacity-10 pointer-events-none rounded-full"
             style={{
@@ -134,7 +151,7 @@ export const DashboardPage: React.FC = () => {
             <div>
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <span className="badge badge-brand text-xs font-semibold">
-                  <Sparkles size={12} /> CONVETER PRO
+                  <Sparkles size={12} /> CONVET PULSE
                 </span>
                 <span className="badge badge-success text-xs">
                   <ShieldCheck size={12} /> 100% Client-Side Privacy
@@ -144,7 +161,7 @@ export const DashboardPage: React.FC = () => {
                 Welcome back{user?.name ? `, ${user.name}` : ''}
               </h1>
               <p className="text-sm text-secondary mt-1 max-w-xl">
-                Convert, compress, and transform your files with blazing fast local processors. Zero uploads, total privacy.
+                Convert, compress, and transform files locally with genuine privacy. Real metrics, reliable tools, zero tracking.
               </p>
             </div>
 
@@ -183,42 +200,95 @@ export const DashboardPage: React.FC = () => {
           </div>
         </div>
 
-        {/* ── 2. Conversion Statistics Strip ───────────────── */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="p-5 rounded-2xl border shadow-sm" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
-            <div className="flex items-center justify-between text-muted-cv mb-2">
-              <span className="text-xs font-semibold uppercase tracking-wider">Conversions</span>
-              <FileText size={16} className="text-indigo-500" />
+        {/* ── 2. Real Analytics Controls & Statistics Strip ── */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <BarChart2 size={16} className="text-accent" />
+              <h2 className="text-sm font-bold text-primary">Live Platform Analytics</h2>
+              <span className="text-2xs text-muted-cv font-medium">(Verified completed jobs)</span>
             </div>
-            <p className="text-2xl font-bold text-primary font-num">{totalCount}</p>
-            <p className="text-xs text-muted-cv mt-1">Processed securely</p>
+
+            <div className="flex items-center gap-2">
+              {/* Date range filter */}
+              <div className="flex items-center gap-1 rounded-xl border p-1 bg-surface text-xs" style={{ borderColor: 'var(--border)' }}>
+                <Calendar size={13} className="text-muted-cv ml-1.5" />
+                {[
+                  { key: 'today', label: 'Today' },
+                  { key: '7d', label: '7 Days' },
+                  { key: '30d', label: '30 Days' },
+                  { key: 'all', label: 'All Time' },
+                ].map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setTimeRange(tab.key)}
+                    className={`px-2.5 py-1 rounded-lg text-2xs font-semibold transition-colors ${
+                      timeRange === tab.key
+                        ? 'bg-primary text-white shadow-sm'
+                        : 'text-muted-cv hover:text-primary'
+                    }`}
+                    style={timeRange === tab.key ? { backgroundColor: 'var(--accent)', color: '#fff' } : {}}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Refresh button */}
+              <button
+                type="button"
+                onClick={() => fetchStats(timeRange)}
+                disabled={isRefreshing}
+                className="btn-ghost btn-sm text-xs gap-1"
+                title="Refresh Analytics"
+              >
+                <RefreshCw size={13} className={isRefreshing ? 'animate-spin' : ''} />
+                Refresh
+              </button>
+            </div>
           </div>
 
-          <div className="p-5 rounded-2xl border shadow-sm" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
-            <div className="flex items-center justify-between text-muted-cv mb-2">
-              <span className="text-xs font-semibold uppercase tracking-wider">Success Rate</span>
-              <CheckCircle2 size={16} className="text-emerald-500" />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="p-5 rounded-2xl border shadow-sm" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
+              <div className="flex items-center justify-between text-muted-cv mb-2">
+                <span className="text-xs font-semibold uppercase tracking-wider">Completed Jobs</span>
+                <FileText size={16} className="text-indigo-500" />
+              </div>
+              <p className="text-2xl font-bold text-primary font-num">{totalCompleted}</p>
+              <p className="text-xs text-muted-cv mt-1">
+                {stats?.todayCount !== undefined ? `${stats.todayCount} today · ${stats.weekCount} this week` : 'Genuine conversions'}
+              </p>
             </div>
-            <p className="text-2xl font-bold text-primary font-num">{successRate}%</p>
-            <p className="text-xs text-emerald-500 mt-1">{successCount} completed</p>
-          </div>
 
-          <div className="p-5 rounded-2xl border shadow-sm" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
-            <div className="flex items-center justify-between text-muted-cv mb-2">
-              <span className="text-xs font-semibold uppercase tracking-wider">Local &amp; Offline</span>
-              <WifiOff size={16} className="text-amber-500" />
+            <div className="p-5 rounded-2xl border shadow-sm" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
+              <div className="flex items-center justify-between text-muted-cv mb-2">
+                <span className="text-xs font-semibold uppercase tracking-wider">Success Rate</span>
+                <CheckCircle2 size={16} className="text-emerald-500" />
+              </div>
+              <p className="text-2xl font-bold text-primary font-num">{calculatedSuccessRate}%</p>
+              <p className="text-xs text-emerald-500 mt-1">
+                {totalCompleted} completed / {totalFailed} failed
+              </p>
             </div>
-            <p className="text-2xl font-bold text-primary font-num">100%</p>
-            <p className="text-xs text-muted-cv mt-1">Zero cloud leaks</p>
-          </div>
 
-          <div className="p-5 rounded-2xl border shadow-sm" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
-            <div className="flex items-center justify-between text-muted-cv mb-2">
-              <span className="text-xs font-semibold uppercase tracking-wider">Active Tools</span>
-              <Zap size={16} className="text-purple-500" />
+            <div className="p-5 rounded-2xl border shadow-sm" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
+              <div className="flex items-center justify-between text-muted-cv mb-2">
+                <span className="text-xs font-semibold uppercase tracking-wider">Avg Duration</span>
+                <Clock size={16} className="text-amber-500" />
+              </div>
+              <p className="text-2xl font-bold text-primary font-num">{avgDurationSec}s</p>
+              <p className="text-xs text-muted-cv mt-1">Per completed file</p>
             </div>
-            <p className="text-2xl font-bold text-primary font-num">{TOOLS.length}</p>
-            <p className="text-xs text-muted-cv mt-1">5 core categories</p>
+
+            <div className="p-5 rounded-2xl border shadow-sm" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
+              <div className="flex items-center justify-between text-muted-cv mb-2">
+                <span className="text-xs font-semibold uppercase tracking-wider">Active Tools</span>
+                <Zap size={16} className="text-purple-500" />
+              </div>
+              <p className="text-2xl font-bold text-primary font-num">{TOOLS.length}</p>
+              <p className="text-xs text-muted-cv mt-1">100% Client-side ready</p>
+            </div>
           </div>
         </div>
 
@@ -259,32 +329,29 @@ export const DashboardPage: React.FC = () => {
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-bold text-primary truncate">{droppedFile.name}</p>
                   <p className="text-2xs text-muted-cv mt-0.5">
-                    Recommended tool: <span className="font-semibold text-primary">{detectedTool.name}</span>
+                    Suggested Tool: <span className="font-semibold text-accent">{detectedTool.name}</span>
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => navigate(`/tool/${detectedTool.slug}`)}
-                  className="btn-primary btn-sm gap-1 text-xs"
+                  className="btn-primary btn-sm flex-shrink-0 gap-1.5"
                 >
-                  Open Tool <ArrowRight size={12} />
+                  Proceed to {detectedTool.name} <ArrowRight size={13} />
                 </button>
               </div>
             )}
           </div>
         </div>
 
-        {/* ── 4. All Tools Workspace ───────────────────────── */}
+        {/* ── 4. Conversion Tools Grid ──────────────────────── */}
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
-              <h2 className="text-xl font-bold text-primary">Available Conversion Tools</h2>
-              <p className="text-xs text-muted-cv mt-0.5">
-                Every tool is verified and runs directly in your browser.
-              </p>
+              <h2 className="text-xl font-bold text-primary tracking-tight">Conversion Tools</h2>
+              <p className="text-xs text-muted-cv mt-0.5">Choose from all 17 private conversion tools</p>
             </div>
 
-            {/* Search & Category Filter */}
             <div className="flex items-center gap-2 flex-wrap">
               <div className="relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-cv" />
@@ -292,71 +359,60 @@ export const DashboardPage: React.FC = () => {
                   type="text"
                   value={toolSearch}
                   onChange={(e) => setToolSearch(e.target.value)}
-                  placeholder="Search tools or formats..."
-                  className="input pl-8 h-9 text-xs w-48 sm:w-64"
+                  placeholder="Filter tools..."
+                  className="input pl-8 h-9 text-xs w-48 sm:w-60"
                 />
               </div>
 
-              <div className="flex items-center gap-1 p-1 rounded-xl border" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
-                {['all', 'pdf', 'image', 'data', 'utilities', 'archive'].map((cat) => (
-                  <button
-                    key={cat}
-                    type="button"
-                    onClick={() => setSelectedCategory(cat)}
-                    className={`px-3 py-1 rounded-lg text-xs font-semibold capitalize transition-all ${
-                      selectedCategory === cat ? 'bg-primary text-white shadow-sm' : 'text-muted-cv hover:text-primary'
-                    }`}
-                    style={selectedCategory === cat ? { backgroundColor: 'var(--accent)', color: '#ffffff' } : {}}
-                  >
-                    {cat}
-                  </button>
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="input h-9 text-xs w-36"
+              >
+                <option value="all">All Categories</option>
+                {Object.values(CATEGORY_META).map((cat) => (
+                  <option key={cat.id} value={cat.id}>
+                    {cat.name}
+                  </option>
                 ))}
-              </div>
+              </select>
             </div>
           </div>
 
-          {/* Tools Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {filteredTools.map((tool) => {
               const meta = CATEGORY_META[tool.category];
               return (
                 <Link
                   key={tool.id}
                   to={`/tool/${tool.slug}`}
-                  className="p-5 rounded-2xl border transition-all duration-200 group hover:border-accent hover:shadow-cv flex flex-col justify-between"
+                  className="p-4 rounded-2xl border transition-all duration-200 hover:-translate-y-0.5 hover:shadow-cv-md flex flex-col justify-between group"
                   style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
                 >
                   <div>
-                    <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="flex items-center justify-between mb-3">
                       <div
-                        className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-base flex-shrink-0"
+                        className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm"
                         style={{ backgroundColor: `${meta.color}15`, color: meta.color }}
                       >
-                        {tool.name[0]}
+                        {tool.name.slice(0, 1)}
                       </div>
-                      <span
-                        className="badge text-2xs uppercase tracking-wider font-semibold"
-                        style={{ backgroundColor: `${meta.color}15`, color: meta.color }}
-                      >
+                      <span className="badge text-2xs uppercase tracking-wider" style={{ backgroundColor: `${meta.color}15`, color: meta.color }}>
                         {meta.name.replace(' Tools', '')}
                       </span>
                     </div>
-
-                    <h3 className="text-sm font-bold text-primary group-hover:text-accent transition-colors">
+                    <h3 className="text-sm font-bold text-primary mb-1 group-hover:text-accent transition-colors">
                       {tool.name}
                     </h3>
-                    <p className="text-xs text-muted-cv mt-1 line-clamp-2 leading-relaxed">
+                    <p className="text-xs text-muted-cv leading-relaxed line-clamp-2">
                       {tool.description}
                     </p>
                   </div>
 
                   <div className="mt-4 pt-3 border-t flex items-center justify-between text-2xs text-muted-cv" style={{ borderColor: 'var(--border)' }}>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {tool.supportedInputFormats?.slice(0, 3).map((fmt) => (
-                        <span key={fmt} className="px-1.5 py-0.5 rounded border uppercase font-mono" style={{ borderColor: 'var(--border)' }}>
-                          {fmt}
-                        </span>
-                      ))}
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-success-500" />
+                      <span>Offline Ready</span>
                     </div>
                     <span className="flex items-center gap-1 font-semibold group-hover:translate-x-0.5 transition-transform" style={{ color: meta.color }}>
                       Launch <ArrowRight size={12} />
@@ -372,11 +428,11 @@ export const DashboardPage: React.FC = () => {
         <div className="p-6 rounded-3xl border shadow-sm" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-base font-bold text-primary">Recent Conversions</h2>
-              <p className="text-xs text-muted-cv mt-0.5">Your most recent local processing tasks</p>
+              <h2 className="text-base font-bold text-primary">Recent Conversion Activity</h2>
+              <p className="text-xs text-muted-cv mt-0.5">Actual completed and verified file conversions</p>
             </div>
             <Link to="/history" className="text-xs text-accent hover:underline flex items-center gap-1 font-semibold">
-              View all <ChevronRight size={13} />
+              Full History <ChevronRight size={13} />
             </Link>
           </div>
 

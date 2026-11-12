@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowRight, Sparkles, Upload, Zap, Shield, Globe, Cpu,
@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { CATEGORY_META, getPopularTools, getNewTools, TOOLS } from '@/registry/tools';
 import { useAppStore } from '@/store/app.store';
+import { apiClient } from '@/lib/api';
 
 // ────────────────────────────────────────────────
 // Hero Section
@@ -15,6 +16,19 @@ import { useAppStore } from '@/store/app.store';
 const HeroSection: React.FC = () => {
   const { setSearchOpen, setSearchQuery } = useAppStore();
   const [aiInput, setAiInput] = useState('');
+  const [processedCount, setProcessedCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    apiClient.getAdminStats().then((res) => {
+      if (res && typeof res.completedJobs === 'number') {
+        setProcessedCount(res.completedJobs);
+      } else {
+        setProcessedCount(0);
+      }
+    }).catch(() => {
+      setProcessedCount(0);
+    });
+  }, []);
 
   const examplePrompts = [
     'Merge multiple PDF documents',
@@ -179,13 +193,13 @@ const HeroSection: React.FC = () => {
           </div>
         </div>
 
-        {/* Trust metrics */}
+        {/* Real Metrics — Verified Data Only */}
         <div className="flex items-center justify-center gap-8 mt-10 flex-wrap">
           {[
-            { label: 'Tools Available', value: `${TOOLS.length}+` },
-            { label: 'Offline Support', value: 'Yes' },
-            { label: 'Files Processed', value: '10M+' },
-            { label: 'Privacy First', value: '100%' },
+            { label: 'Tools Available', value: `${TOOLS.length}` },
+            { label: 'Offline Support', value: '100% Ready' },
+            { label: 'Files Processed', value: processedCount !== null ? `${processedCount}` : '0' },
+            { label: 'Privacy First', value: 'Client-Side' },
           ].map((m) => (
             <div key={m.label} className="flex flex-col items-center gap-1">
               <span className="text-2xl font-bold font-num" style={{ color: 'var(--accent)' }}>
@@ -736,6 +750,14 @@ const NewToolsSection: React.FC = () => {
 // Premium CTA
 // ────────────────────────────────────────────────
 const PremiumCTA: React.FC = () => {
+  const { premiumConfig } = useAppStore();
+
+  if (premiumConfig && (!premiumConfig.enabled || !premiumConfig.showPremiumButton)) {
+    return null;
+  }
+
+  const priceLabel = premiumConfig?.price?.label || '₹199/month';
+
   return (
     <section className="py-16">
       <div className="container-narrow">
@@ -749,7 +771,7 @@ const PremiumCTA: React.FC = () => {
           <div className="flex-1">
             <div className="flex items-center gap-2 mb-3">
               <Zap size={16} style={{ color: '#f59e0b' }} />
-              <span className="text-label" style={{ color: '#f59e0b' }}>CONVETER Premium</span>
+              <span className="text-label" style={{ color: '#f59e0b' }}>CONVET PULSE Premium</span>
             </div>
             <h2 className="text-2xl font-bold mb-2">Unlock the full platform</h2>
             <p className="text-secondary max-w-lg">
@@ -769,10 +791,9 @@ const PremiumCTA: React.FC = () => {
           <div className="flex flex-col items-center gap-3 flex-shrink-0">
             <div className="text-center">
               <div className="flex items-end gap-1 justify-center">
-                <span className="text-4xl font-bold text-primary">$9</span>
-                <span className="text-secondary mb-1">/month</span>
+                <span className="text-3xl font-bold text-primary">{priceLabel}</span>
               </div>
-              <p className="text-xs text-muted-cv">or $79/year — save 27%</p>
+              <p className="text-xs text-muted-cv mt-1">Cancel anytime · Priority processing</p>
             </div>
             <Link to="/pricing" className="btn-primary btn-lg w-full justify-center">
               View Pricing

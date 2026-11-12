@@ -7,6 +7,7 @@ import {
   AlertCircle, X, Loader2, FileText, Layers, ArrowRight,
   Sparkles, Settings, Copy, Globe, PenLine, Camera,
   Eraser, Trash2, Check, ChevronDown, ChevronUp, ArrowLeft,
+  Lock, Zap,
 } from 'lucide-react';
 import { getToolBySlug, getRelatedTools, CATEGORY_META } from '@/registry/tools';
 import { useAppStore } from '@/store/app.store';
@@ -762,7 +763,7 @@ const OptionsPanel: React.FC<{
 // ────────────────────────────────────────────────
 export const ToolPage: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
-  const { isFavoriteTool, toggleFavoriteTool, addNotification } = useAppStore();
+  const { isFavoriteTool, toggleFavoriteTool, addNotification, user } = useAppStore();
 
   const tool = slug ? getToolBySlug(slug) : undefined;
   const dispatch = slug ? getToolDispatch(slug) : null;
@@ -775,6 +776,25 @@ export const ToolPage: React.FC = () => {
   const [textInput, setTextInput] = useState('');
   const [urlInput, setUrlInput] = useState('');
   const [signatureDataUrl, setSignatureDataUrl] = useState('');
+  const [accessRestricted, setAccessRestricted] = useState(false);
+  const [restrictionReason, setRestrictionReason] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!tool) return;
+    apiClient.verifyToolAccess({
+      toolSlug: tool.slug,
+      isPremiumUser: user?.plan === 'premium',
+      userId: user?.id,
+      userName: user?.name,
+    }).then((res) => {
+      if (res && !res.authorized) {
+        setAccessRestricted(true);
+        setRestrictionReason(res.error || 'This tool requires an active Premium membership.');
+      } else {
+        setAccessRestricted(false);
+      }
+    }).catch(() => {});
+  }, [tool, user]);
   const [options, setOptions] = useState<Record<string, unknown>>(() => {
     const defaults: Record<string, unknown> = {};
     dispatch?.optionFields?.forEach((f) => { defaults[f.key] = f.default; });
@@ -817,6 +837,15 @@ export const ToolPage: React.FC = () => {
     inputFiles: ProcessingFile[],
     extraOpts: Record<string, unknown> = {}
   ) => {
+    if (accessRestricted) {
+      addNotification({
+        title: 'Premium Required',
+        desc: restrictionReason || 'This tool requires a Premium subscription. Please upgrade to continue.',
+        type: 'error',
+      });
+      return;
+    }
+
     if (!dispatch) {
       const message = 'This tool does not have a processor in this build.';
       setFiles((prev) => prev.map((f) =>
@@ -1239,6 +1268,42 @@ export const ToolPage: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            {/* Premium Locked Banner */}
+            {accessRestricted && (
+              <div
+                className="p-5 rounded-2xl border mb-6 flex items-start gap-4 animate-slide-down"
+                style={{
+                  backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                  borderColor: 'rgba(245, 158, 11, 0.25)',
+                }}
+              >
+                <div
+                  className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{ backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}
+                >
+                  <Lock size={20} />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="text-sm font-bold text-primary">Premium Feature Restricted</h3>
+                    <span className="badge text-2xs uppercase tracking-wider font-semibold" style={{ backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
+                      Pro Required
+                    </span>
+                  </div>
+                  <p className="text-xs text-secondary leading-relaxed mb-3">
+                    {restrictionReason || 'This conversion tool has been configured for Premium members only by the system administrator. Upgrade your plan to unlock unlimited batch processing.'}
+                  </p>
+                  <Link
+                    to="/pricing"
+                    className="btn-primary btn-sm gap-1.5 font-bold text-xs inline-flex items-center"
+                    style={{ backgroundColor: '#f59e0b', borderColor: '#f59e0b', color: '#ffffff' }}
+                  >
+                    <Zap size={13} className="fill-current" /> View Upgrade Options
+                  </Link>
+                </div>
+              </div>
+            )}
 
             {/* Guided Workflow Stepper */}
             <nav aria-label="Tool steps" className="mb-6 p-1.5 rounded-xl border flex items-center gap-1 sm:gap-2 flex-wrap" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>

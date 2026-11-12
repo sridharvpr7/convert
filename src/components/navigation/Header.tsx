@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
-  Search, Bell, ChevronDown, Menu, X, LogIn, Zap,
+  Search, Bell, ChevronDown, Menu, X, LogIn, Zap, AlertTriangle,
 } from 'lucide-react';
 import { ConveterLogo } from '@/components/ui/Logo';
 import { ThemeSwitcher } from '@/components/ui/ThemeSwitcher';
@@ -9,6 +9,7 @@ import { MegaMenu } from './MegaMenu';
 import { useAppStore } from '@/store/app.store';
 import { auth } from '@/lib/firebase';
 import { signOut } from 'firebase/auth';
+import { apiClient } from '@/lib/api';
 
 const NAV_LINKS = [
   { label: 'Home', href: '/' },
@@ -31,6 +32,8 @@ export const Header: React.FC = () => {
     setNotificationsOpen,
     notifications,
     setUser,
+    premiumConfig,
+    setPremiumConfig,
   } = useAppStore();
 
   const unreadCount = notifications.filter((n) => !n.read).length;
@@ -39,6 +42,15 @@ export const Header: React.FC = () => {
   const [scrolled, setScrolled] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const toolsButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Fetch server-side premium config on mount
+  useEffect(() => {
+    apiClient.getPublicPremiumConfig().then((config) => {
+      if (config) {
+        setPremiumConfig(config);
+      }
+    }).catch(() => {});
+  }, [setPremiumConfig]);
 
   // Track scroll for header shadow
   useEffect(() => {
@@ -69,21 +81,37 @@ export const Header: React.FC = () => {
     return location.pathname.startsWith(href);
   };
 
+  // Determine whether to display the Premium button according to JSON config rules:
+  // Must have premium.enabled === true AND showPremiumButton === true
+  const showPremium = premiumConfig
+    ? Boolean(premiumConfig.enabled && premiumConfig.showPremiumButton)
+    : true;
+
+  const isMaintenance = Boolean(premiumConfig?.maintenanceMode);
+
   return (
     <>
+      {isMaintenance && (
+        <div className="fixed top-0 left-0 right-0 z-[60] bg-warning-500/90 text-white text-xs py-1 px-4 text-center font-medium flex items-center justify-center gap-1.5 shadow-sm">
+          <AlertTriangle size={13} />
+          <span>Scheduled maintenance mode is active. Some tools may be temporarily limited.</span>
+        </div>
+      )}
+
       <header
-        className="fixed top-0 left-0 right-0 z-50 h-14 flex items-center"
+        className={`fixed left-0 right-0 z-50 h-14 flex items-center transition-all duration-200 ${
+          isMaintenance ? 'top-6' : 'top-0'
+        }`}
         style={{
           backgroundColor: scrolled ? 'var(--surface)' : 'var(--bg)',
           borderBottom: '1px solid',
           borderColor: scrolled ? 'var(--border)' : 'transparent',
           boxShadow: scrolled ? 'var(--shadow-sm)' : 'none',
-          transition: 'background-color 0.2s, border-color 0.2s, box-shadow 0.2s',
         }}
       >
         <div className="container-app flex items-center gap-4 h-full">
           {/* Logo */}
-          <Link to="/" className="flex-shrink-0 mr-2" aria-label="CONVETER Home">
+          <Link to="/" className="flex-shrink-0 mr-2" aria-label="CONVET PULSE Home">
             <ConveterLogo size={28} showText />
           </Link>
 
@@ -175,18 +203,21 @@ export const Header: React.FC = () => {
             {/* Theme switcher */}
             <ThemeSwitcher compact />
 
-            {/* Pricing */}
-            <Link
-              to="/pricing"
-              className="hidden md:flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold transition-all duration-150"
-              style={{
-                backgroundColor: '#f59e0b15',
-                color: '#f59e0b',
-              }}
-            >
-              <Zap size={12} />
-              Premium
-            </Link>
+            {/* Pricing / Premium Button (Controlled by server-side JSON config) */}
+            {showPremium && (
+              <Link
+                to="/pricing"
+                className="hidden md:flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold transition-all duration-150 shadow-sm"
+                style={{
+                  backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                  color: '#f59e0b',
+                  border: '1px solid rgba(245, 158, 11, 0.25)',
+                }}
+              >
+                <Zap size={12} className="fill-current" />
+                Premium
+              </Link>
+            )}
 
             {/* Notifications */}
             <div className="relative">
@@ -203,14 +234,24 @@ export const Header: React.FC = () => {
             {/* User menu */}
             {user ? (
               <div className="relative">
-                <button onClick={() => setProfileMenuOpen((open) => !open)} aria-expanded={profileMenuOpen} className="flex items-center gap-2 h-9 px-2 rounded-lg transition-all duration-150 hover:bg-hover-cv">
-                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0 overflow-hidden" style={{ backgroundColor: 'var(--accent)' }}>
+                <button
+                  onClick={() => setProfileMenuOpen((open) => !open)}
+                  aria-expanded={profileMenuOpen}
+                  className="flex items-center gap-2 h-9 px-2 rounded-lg transition-all duration-150 hover:bg-hover-cv"
+                >
+                  <div
+                    className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0 overflow-hidden"
+                    style={{ backgroundColor: 'var(--accent)' }}
+                  >
                     {user.avatar ? <img src={user.avatar} alt="" className="w-full h-full object-cover" /> : user.name[0]}
                   </div>
                   <ChevronDown size={12} style={{ color: 'var(--text-muted)' }} />
                 </button>
                 {profileMenuOpen && (
-                  <div className="absolute right-0 top-11 z-[120] w-56 rounded-xl border p-2 shadow-cv-lg" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  <div
+                    className="absolute right-0 top-11 z-[120] w-56 rounded-xl border p-2 shadow-cv-lg"
+                    style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}
+                  >
                     <p className="px-3 py-2 text-xs text-muted-cv truncate">{user.email}</p>
                     <Link onClick={() => setProfileMenuOpen(false)} to="/dashboard" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Dashboard</Link>
                     <Link onClick={() => setProfileMenuOpen(false)} to="/history" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Conversion History</Link>
@@ -315,13 +356,15 @@ export const Header: React.FC = () => {
                   >
                     Admin Console
                   </Link>
-                  <Link
-                    to="/pricing"
-                    className="block px-4 py-3 rounded-lg text-sm font-medium text-warning-600 hover:bg-hover-cv"
-                    onClick={() => setMobileMenuOpen(false)}
-                  >
-                    ⚡ Premium Features
-                  </Link>
+                  {showPremium && (
+                    <Link
+                      to="/pricing"
+                      className="block px-4 py-3 rounded-lg text-sm font-medium text-warning-600 hover:bg-hover-cv"
+                      onClick={() => setMobileMenuOpen(false)}
+                    >
+                      ⚡ Premium Features
+                    </Link>
+                  )}
                   {!user && (
                     <div className="flex gap-2 pt-1">
                       <Link
