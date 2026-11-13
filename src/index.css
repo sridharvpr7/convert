@@ -31,26 +31,26 @@
   }
 
   .dark {
-    /* Dark theme variables */
-    --bg: #0d0d14;
-    --surface: #12121c;
-    --card: #181826;
-    --border: #27273a;
-    --border-subtle: #1e1e2e;
-    --hover: #222234;
-    --muted: #242436;
-    --text-primary: #f5f5ff;
-    --text-secondary: #b5b5d6;
-    --text-muted: #8e8eb4;
-    --text-disabled: #5a5a7c;
+    /* Premium Dark Theme — layered deep charcoal & cold metallic surfaces */
+    --bg: #090a0f;
+    --surface: #10121a;
+    --card: #151824;
+    --border: #232738;
+    --border-subtle: #191c2b;
+    --hover: #1c2030;
+    --muted: #1e2235;
+    --text-primary: #f8fafc;
+    --text-secondary: #cbd5e1;
+    --text-muted: #8492a6;
+    --text-disabled: #475569;
     --accent: #5b6af8;
-    --accent-hover: #4A4AE8;
-    --accent-subtle: #1c1c38;
-    --shadow-sm: 0 1px 3px 0 rgba(0,0,0,0.4), 0 1px 2px -1px rgba(0,0,0,0.3);
-    --shadow: 0 4px 16px 0 rgba(0,0,0,0.5), 0 2px 6px -1px rgba(0,0,0,0.4);
-    --shadow-lg: 0 10px 40px 0 rgba(0,0,0,0.6), 0 4px 12px -2px rgba(0,0,0,0.5);
-    --scrollbar-thumb: #2a2a3d;
-    --scrollbar-track: #12121c;
+    --accent-hover: #4e5be6;
+    --accent-subtle: #161933;
+    --shadow-sm: 0 1px 3px 0 rgba(0,0,0,0.45), 0 1px 2px -1px rgba(0,0,0,0.35);
+    --shadow: 0 4px 16px 0 rgba(0,0,0,0.6), 0 2px 6px -1px rgba(0,0,0,0.45);
+    --shadow-lg: 0 10px 40px 0 rgba(0,0,0,0.7), 0 4px 12px -2px rgba(0,0,0,0.55);
+    --scrollbar-thumb: #232738;
+    --scrollbar-track: #090a0f;
   }
 
   * {

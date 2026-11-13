@@ -21,20 +21,47 @@ const APP_URL = process.env.APP_URL || 'https://convetpulse.onrender.com';
 const dedupeCache = new Map();
 const DEDUPE_TTL_MS = 30000;
 
-function isDuplicate(key) {
+function isDuplicate(key, ttlMs = DEDUPE_TTL_MS) {
   const now = Date.now();
   if (dedupeCache.has(key)) {
     const ts = dedupeCache.get(key);
-    if (now - ts < DEDUPE_TTL_MS) return true;
+    if (now - ts < ttlMs) return true;
   }
   dedupeCache.set(key, now);
   // Clean up cache periodically
   if (dedupeCache.size > 2000) {
     for (const [k, v] of dedupeCache.entries()) {
-      if (now - v > DEDUPE_TTL_MS) dedupeCache.delete(k);
+      if (now - v > ttlMs) dedupeCache.delete(k);
     }
   }
   return false;
+}
+
+// Human-readable action mappings (never reveal internal slugs/raw operation IDs)
+export const ACTION_DESCRIPTIONS = {
+  'merge-pdf': 'Combined multiple PDF files into one document',
+  'split-pdf': 'Split PDF document into individual pages',
+  'compress-pdf': 'Optimized and compressed PDF file size',
+  'rotate-pdf': 'Adjusted PDF page rotation and orientation',
+  'jpg-to-pdf': 'Converted image files into a PDF document',
+  'pdf-to-text': 'Extracted readable text content from a PDF document',
+  'image-converter': 'Converted image to target graphic format',
+  'image-compressor': 'Compressed image while optimizing visual quality',
+  'image-resizer': 'Resized image dimensions to specified scale',
+  'image-cropper': 'Cropped image to target aspect ratio',
+  'csv-to-json': 'Converted tabular CSV data into structured JSON',
+  'json-to-csv': 'Converted structured JSON data into tabular CSV format',
+  'csv-to-excel': 'Exported CSV data into Excel spreadsheet (.xlsx)',
+  'excel-to-csv': 'Extracted spreadsheet sheet data into CSV format',
+  'qr-generator': 'Generated high-resolution QR code graphic',
+  'zip-create': 'Created compressed ZIP file archive',
+  'zip-extract': 'Extracted files from compressed ZIP archive',
+};
+
+export function getHumanReadableAction(slug, fallbackName) {
+  if (slug && ACTION_DESCRIPTIONS[slug]) return ACTION_DESCRIPTIONS[slug];
+  if (fallbackName) return `Completed ${fallbackName} operation successfully`;
+  return 'Your requested operation was completed successfully.';
 }
 
 // Format file size nicely
@@ -221,6 +248,88 @@ export const telegramService = {
   },
 
   /**
+   * Successful User Login Notification
+   */
+  async notifySuccessfulLogin(user, provider = 'Email & Password') {
+    const settings = db.getNotificationSettings();
+    if (settings.notify_user_login === false) return;
+
+    const dedupeKey = `login_${user.id}_${Math.floor(Date.now() / 60000)}`;
+    if (isDuplicate(dedupeKey, 60000)) return;
+
+    const timeStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    const userDisplay = user.name || user.displayName || 'User';
+    const emailDisplay = user.email || 'Not provided';
+
+    const msg = [
+      '🟢 <b>CONVET PULSE — User Login</b>',
+      '',
+      `👤 <b>User:</b> ${escapeHtml(userDisplay)}`,
+      `📧 <b>Email:</b> ${escapeHtml(emailDisplay)}`,
+      `🔑 <b>Provider:</b> ${escapeHtml(provider)}`,
+      `🕒 <b>Time:</b> ${timeStr}`,
+      `ℹ️ <b>Status:</b> User authenticated successfully.`,
+    ].join('\n');
+
+    await sendTelegramMessage(ADMIN_CHAT_ID, msg, {}, 'user_login');
+    db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'user_login', userId: user.id });
+  },
+
+  /**
+   * Authenticated App-Open Notification (Deduplicated with 15m window)
+   */
+  async notifyAppOpen(user) {
+    const settings = db.getNotificationSettings();
+    if (settings.notify_app_open === false) return false;
+
+    // Deduplicate per user for 15 minutes (900,000 ms)
+    const dedupeKey = `app_open_${user.id}`;
+    if (isDuplicate(dedupeKey, 15 * 60 * 1000)) return false;
+
+    const timeStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    const userDisplay = user.name || user.displayName || 'User';
+    const emailDisplay = user.email || 'Verified Account';
+
+    const msg = [
+      '📱 <b>CONVET PULSE — Authenticated User Visit</b>',
+      '',
+      `👤 <b>User:</b> ${escapeHtml(userDisplay)}`,
+      `📧 <b>Email:</b> ${escapeHtml(emailDisplay)}`,
+      `🕒 <b>Time:</b> ${timeStr}`,
+      `ℹ️ <b>Status:</b> Authenticated user opened the application.`,
+    ].join('\n');
+
+    await sendTelegramMessage(ADMIN_CHAT_ID, msg, {}, 'app_open');
+    db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'app_open', userId: user.id });
+    return true;
+  },
+
+  /**
+   * Premium Payment Received Notification
+   */
+  async notifyPaymentReceived(payment) {
+    const settings = db.getNotificationSettings();
+    if (settings.notify_payment_received === false) return;
+
+    const timeStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    const amountInRupees = typeof payment.amount === 'number' && payment.amount > 1000 ? (payment.amount / 100).toFixed(0) : payment.amount;
+
+    const msg = [
+      '⭐ <b>CONVET PULSE — Premium Payment Received</b>',
+      '',
+      `👤 <b>User:</b> ${escapeHtml(payment.user_email || payment.user_id)}`,
+      `💳 <b>Order ID:</b> <code>${escapeHtml(payment.order_id)}</code>`,
+      `💰 <b>Amount:</b> ₹${amountInRupees} ${escapeHtml(payment.currency || 'INR')}`,
+      `⭐ <b>Plan:</b> ${escapeHtml(payment.plan ? payment.plan.toUpperCase() : 'PREMIUM PRO')}`,
+      `🕒 <b>Time:</b> ${timeStr}`,
+      `✅ <b>Status:</b> Verified & Premium Entitlement Activated`,
+    ].join('\n');
+
+    await sendTelegramMessage(ADMIN_CHAT_ID, msg, {}, 'payment_received');
+    db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'payment_received', orderId: payment.order_id });
+  },
+
+  /**
    * Conversion Started Notification
    */
   async notifyConversionStarted(job) {
@@ -263,47 +372,46 @@ export const telegramService = {
   },
 
   /**
-   * Conversion Completed Notification
+   * Conversion Completed Notification (Clean, Human-Readable, Usage-Aware)
    */
-  async notifyConversionCompleted(job) {
+  async notifyConversionCompleted(job, usageStats = null) {
     const settings = db.getNotificationSettings();
     if (!settings.notify_conversion_completed) return;
 
     const dedupeKey = `complete_${job.id}`;
     if (isDuplicate(dedupeKey)) return;
 
-    const dateStr = new Date().toLocaleDateString('en-GB', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    });
+    // Human-readable action description without exposing internal slugs or raw operation IDs
+    const actionDesc = getHumanReadableAction(job.toolSlug || job.tool_slug, job.toolName);
 
-    const durationSec = ((job.durationMs || 1000) / 1000).toFixed(1);
+    // Verified User Identity
+    let userDisplay = 'Verified User';
+    if (job.userName && job.userName !== 'Anonymous User') {
+      userDisplay = job.userEmail ? `${job.userName} (${job.userEmail})` : job.userName;
+    } else if (job.userEmail) {
+      userDisplay = job.userEmail;
+    } else {
+      userDisplay = 'Anonymous User';
+    }
+
+    const actionCount = usageStats?.actionCount ?? 1;
+    const totalCount = usageStats?.totalUserCount ?? 1;
+    const timeStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 
     const msg = [
-      '✅ <b>CONVERSION COMPLETED</b>',
+      '✅ <b>CONVET PULSE — Task Completed</b>',
       '',
-      `👤 <b>User:</b> ${escapeHtml(job.userName || 'Anonymous User')}`,
-      `🔧 <b>Tool Used:</b> ${escapeHtml(job.toolName)}`,
-      `📂 <b>Original File:</b> ${escapeHtml(job.inputFileName || 'file')}`,
-      `📤 <b>Converted File:</b> ${escapeHtml(job.outputFileName || 'output')}`,
-      `📦 <b>Original Size:</b> ${formatSize(job.inputFileSize)}`,
-      `📦 <b>Output Size:</b> ${formatSize(job.outputFileSize)}`,
-      `⏱ <b>Processing Time:</b> ${durationSec}s`,
-      `📅 <b>Completed:</b> ${dateStr}`,
-      `🆔 <b>Job ID:</b> <code>${escapeHtml(job.id)}</code>`,
-      '',
-      'Status: <b>SUCCESS</b>',
+      `👤 <b>User:</b> ${escapeHtml(userDisplay)}`,
+      `⚡ <b>Action:</b> ${escapeHtml(actionDesc)}`,
+      `🎯 <b>This Action:</b> ${actionCount} successful completion${actionCount === 1 ? '' : 's'}`,
+      `📈 <b>Overall Usage:</b> ${totalCount} successful completion${totalCount === 1 ? '' : 's'}`,
+      `🕒 <b>Time:</b> ${timeStr}`,
     ].join('\n');
 
     const replyMarkup = {
       inline_keyboard: [
         [
-          { text: '👁 View Job', url: `${APP_URL}/admin?job=${job.id}` },
-          { text: '💬 Add Comment', callback_data: `comment:${job.id}` },
-        ],
-        [
-          { text: '📊 Dashboard', url: `${APP_URL}/admin` },
+          { text: '📊 Admin Dashboard', url: `${APP_URL}/admin` },
         ],
       ],
     };

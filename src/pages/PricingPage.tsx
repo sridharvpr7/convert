@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { Check, Zap, Shield, ArrowRight, HelpCircle, X, Info, CheckCircle2 } from 'lucide-react';
-import { apiClient, PublicPremiumConfig } from '@/lib/api';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Check, Zap, Shield, ArrowRight, HelpCircle, X, Info, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { apiClient, PublicPremiumConfig, PaymentConfig } from '@/lib/api';
+import { useAppStore } from '@/store/app.store';
 
 interface PricingPlan {
   id: string;
@@ -14,7 +15,7 @@ interface PricingPlan {
   color: string;
   features: { text: string; included: boolean; note?: string }[];
   cta: string;
-  ctaHref: string;
+  ctaHref?: string;
 }
 
 const FAQ_ITEMS = [
@@ -24,15 +25,15 @@ const FAQ_ITEMS = [
   },
   {
     q: 'What happens to my files after processing?',
-    a: 'Files processed locally never leave your device. For server-assisted jobs, files are processed in ephemeral memory and immediately discarded. No user file contents are stored or shared.',
+    a: 'Files processed locally never leave your device. All conversions execute 100% inside your browser using client-side libraries. No file contents are uploaded, saved, or inspected on any server.',
   },
   {
     q: 'How does the Premium upgrade work?',
     a: 'Premium unlocks batch file processing, priority processing speed, larger file capacity, and advanced format support as configured by the system administrator.',
   },
   {
-    q: 'What payment methods will be supported?',
-    a: 'We are preparing verified automated payment provider integration (Stripe and Razorpay). In the interim, premium access can be managed through platform administrator keys.',
+    q: 'What payment methods are supported?',
+    a: 'We support secure payment processing powered by Razorpay (UPI, Credit/Debit cards, Net Banking, and Wallets) with server-side HMAC SHA256 cryptographic signature verification.',
   },
   {
     q: 'What file size limits apply?',
@@ -40,20 +41,52 @@ const FAQ_ITEMS = [
   },
   {
     q: 'Is there a money-back guarantee?',
-    a: 'Yes, once automated billing is fully activated, all subscriptions include an unconditional 30-day money-back guarantee.',
+    a: 'Yes, all paid subscriptions include an unconditional 30-day money-back guarantee.',
   },
 ];
 
+function loadRazorpayScript(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if ((window as unknown as { Razorpay?: unknown }).Razorpay) {
+      resolve(true);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
+
 export const PricingPage: React.FC = () => {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const { user, setUser, addNotification } = useAppStore();
+
   const [billing, setBilling] = useState<'monthly' | 'yearly'>('monthly');
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [premiumConfig, setPremiumConfig] = useState<PublicPremiumConfig | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null);
+  const [, setLoading] = useState(true);
+
+  // Checkout states
+  const [checkoutStatus, setCheckoutStatus] = useState<
+    'idle' | 'creating' | 'open' | 'verifying' | 'success' | 'error'
+  >('idle');
+  const [checkoutMessage, setCheckoutMessage] = useState<string | null>(null);
+  const [activePlanId, setActivePlanId] = useState<string | null>(null);
 
   useEffect(() => {
-    apiClient.getPublicPremiumConfig().then((cfg) => {
-      if (cfg) setPremiumConfig(cfg);
-    }).finally(() => setLoading(false));
+    Promise.all([
+      apiClient.getPublicPremiumConfig().then((cfg) => {
+        if (cfg) setPremiumConfig(cfg);
+      }),
+      apiClient.getPaymentConfig().then((pcfg) => {
+        if (pcfg) setPaymentConfig(pcfg);
+      }),
+    ]).finally(() => setLoading(false));
   }, []);
 
   const isPremiumEnabled = premiumConfig?.enabled ?? true;
@@ -63,6 +96,126 @@ export const PricingPage: React.FC = () => {
   const priceLabel = premiumConfig?.price?.label || `${currencySymbol}${priceAmount}/month`;
 
   const yearlyDiscountPrice = Math.round(priceAmount * 10); // 10 months for 12 months
+
+  const isUserPremium = user?.plan === 'premium';
+
+  const handleSubscribeClick = async (planId: string) => {
+    if (planId === 'free') {
+      navigate('/tools');
+      return;
+    }
+    if (planId === 'business') {
+      navigate('/help#getting-started');
+      return;
+    }
+
+    // Must be logged in to subscribe
+    if (!user) {
+      navigate(`/login?redirect=${encodeURIComponent('/pricing?plan=premium')}`);
+      return;
+    }
+
+    if (isUserPremium) {
+      setCheckoutStatus('success');
+      setCheckoutMessage('You are already subscribed to Premium Pro! All premium features are unlocked.');
+      return;
+    }
+
+    // Verify payment gateway is configured on backend
+    if (!paymentConfig || !paymentConfig.enabled || !paymentConfig.keyId) {
+      setCheckoutStatus('error');
+      setCheckoutMessage(
+        'Payment Gateway Notice: Razorpay payment gateway credentials are not yet configured on the production server. Please contact the administrator or check back soon.'
+      );
+      return;
+    }
+
+    setActivePlanId(planId);
+    setCheckoutStatus('creating');
+    setCheckoutMessage('Initializing secure order with Razorpay...');
+
+    try {
+      const scriptLoaded = await loadRazorpayScript();
+      if (!scriptLoaded) {
+        setCheckoutStatus('error');
+        setCheckoutMessage('Unable to load Razorpay checkout script. Please check your network connection.');
+        return;
+      }
+
+      // Create order via backend endpoint
+      const orderRes = await apiClient.createPaymentOrder(user.id, user.email, planId);
+      if (!orderRes.success || !orderRes.orderId) {
+        setCheckoutStatus('error');
+        setCheckoutMessage(orderRes.error || 'Failed to create payment order. Please try again.');
+        return;
+      }
+
+      setCheckoutStatus('open');
+      setCheckoutMessage('Checkout window opened. Please complete your payment in the Razorpay popup.');
+
+      const RazorpayConstructor = (window as unknown as { Razorpay: new (opts: unknown) => { open: () => void } }).Razorpay;
+      const rzp = new RazorpayConstructor({
+        key: orderRes.keyId || paymentConfig.keyId,
+        amount: orderRes.amount,
+        currency: orderRes.currency,
+        name: 'CONVET PULSE',
+        description: 'Premium Pro Subscription',
+        order_id: orderRes.orderId,
+        prefill: {
+          name: user.name || '',
+          email: user.email || '',
+        },
+        theme: {
+          color: '#5b6af8',
+        },
+        modal: {
+          ondismiss: () => {
+            setCheckoutStatus('idle');
+            setCheckoutMessage(null);
+          },
+        },
+        handler: async (response: {
+          razorpay_order_id: string;
+          razorpay_payment_id: string;
+          razorpay_signature: string;
+        }) => {
+          setCheckoutStatus('verifying');
+          setCheckoutMessage('Cryptographically verifying payment signature with server...');
+
+          try {
+            const verifyRes = await apiClient.verifyPayment({
+              orderId: response.razorpay_order_id,
+              paymentId: response.razorpay_payment_id,
+              signature: response.razorpay_signature,
+              userId: user.id,
+            });
+
+            if (verifyRes.success) {
+              setCheckoutStatus('success');
+              setCheckoutMessage('Payment successfully verified! Your account has been upgraded to Premium Pro.');
+              setUser({ ...user, plan: 'premium' });
+              addNotification({
+                title: 'Premium Activated',
+                desc: 'Your Premium Pro subscription has been verified successfully.',
+                type: 'success',
+              });
+            } else {
+              setCheckoutStatus('error');
+              setCheckoutMessage(verifyRes.error || 'Payment signature verification failed. Please contact support.');
+            }
+          } catch (err: unknown) {
+            setCheckoutStatus('error');
+            setCheckoutMessage((err as Error)?.message || 'Verification request failed. Please contact support.');
+          }
+        },
+      });
+
+      rzp.open();
+    } catch (err: unknown) {
+      setCheckoutStatus('error');
+      setCheckoutMessage((err as Error)?.message || 'An unexpected error occurred while initiating checkout.');
+    }
+  };
 
   const plans: PricingPlan[] = [
     {
@@ -76,12 +229,12 @@ export const PricingPage: React.FC = () => {
       cta: 'Start Free Conversion',
       ctaHref: '/tools',
       features: [
-        { text: 'Access to all client-side tools', included: true },
+        { text: 'Access to all 17 client-side tools', included: true },
         { text: 'PDF tools (Merge, Split, Rotate)', included: true },
         { text: 'Image tools (JPG, PNG, WebP)', included: true },
         { text: 'Data tools (CSV, JSON, Excel)', included: true },
         { text: 'QR Code Generator & Archives', included: true },
-        { text: '100% Client-side privacy', included: true },
+        { text: '100% Client-side privacy & zero file uploads', included: true },
         { text: 'Up to 25MB file size', included: true },
         { text: 'Batch conversion', included: false },
         { text: 'Priority processing speed', included: false },
@@ -97,9 +250,12 @@ export const PricingPage: React.FC = () => {
       yearlyPrice: yearlyDiscountPrice,
       currencySymbol,
       popular: true,
-      color: '#4A4AE8',
-      cta: isPremiumEnabled ? 'Subscribe to Premium' : 'Currently Included in Free',
-      ctaHref: '/register?plan=premium',
+      color: '#5b6af8',
+      cta: isUserPremium
+        ? 'Active Plan'
+        : isPremiumEnabled
+        ? 'Subscribe to Premium'
+        : 'Currently Included in Free',
       features: [
         { text: 'Everything in Free Starter', included: true },
         { text: 'High-volume files (up to 500MB)', included: true },
@@ -119,8 +275,8 @@ export const PricingPage: React.FC = () => {
       yearlyPrice: yearlyDiscountPrice * 4,
       currencySymbol,
       color: '#7c3aed',
-      cta: 'Contact Sales',
-      ctaHref: '/contact',
+      cta: 'Contact Support',
+      ctaHref: '/help#getting-started',
       features: [
         { text: 'All Premium Pro features', included: true },
         { text: 'Up to 2GB file size limit', included: true },
@@ -147,7 +303,7 @@ export const PricingPage: React.FC = () => {
           Choose the right plan for your file workflows
         </h1>
         <p className="text-secondary max-w-xl mx-auto text-sm leading-relaxed">
-          Start free with 100% client-side privacy. Upgrade when you need batch conversions and priority capacity.
+          Start free with 100% client-side privacy. Upgrade to Premium Pro for batch processing and extended capacity.
         </p>
 
         {/* Global status notice if premium is disabled */}
@@ -191,6 +347,46 @@ export const PricingPage: React.FC = () => {
 
       {/* Plans grid */}
       <div className="container-narrow">
+        {/* Checkout feedback banner */}
+        {checkoutStatus !== 'idle' && checkoutMessage && (
+          <div
+            className={`max-w-2xl mx-auto mb-8 p-4 rounded-xl border flex items-start gap-3 text-sm leading-relaxed ${
+              checkoutStatus === 'success'
+                ? 'bg-success-500/10 border-success-500/30 text-success-600'
+                : checkoutStatus === 'error'
+                ? 'bg-red-500/10 border-red-500/30 text-red-600'
+                : 'bg-accent/10 border-accent/30 text-primary'
+            }`}
+          >
+            {checkoutStatus === 'success' ? (
+              <CheckCircle2 size={20} className="flex-shrink-0 mt-0.5" />
+            ) : checkoutStatus === 'error' ? (
+              <AlertCircle size={20} className="flex-shrink-0 mt-0.5" />
+            ) : (
+              <Loader2 size={20} className="flex-shrink-0 mt-0.5 animate-spin" />
+            )}
+            <div className="flex-1">
+              <p className="font-semibold mb-0.5">
+                {checkoutStatus === 'success'
+                  ? 'Payment Confirmed'
+                  : checkoutStatus === 'error'
+                  ? 'Payment Notice'
+                  : 'Processing'}
+              </p>
+              <p className="text-xs">{checkoutMessage}</p>
+            </div>
+            <button
+              onClick={() => {
+                setCheckoutStatus('idle');
+                setCheckoutMessage(null);
+              }}
+              className="p-1 rounded hover:bg-black/10 transition-colors"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
         {/* Honest Demonstration Notice */}
         <div
           className="max-w-2xl mx-auto mb-10 p-4 rounded-xl border flex items-start gap-3 text-xs leading-relaxed"
@@ -198,10 +394,11 @@ export const PricingPage: React.FC = () => {
         >
           <Info size={18} className="text-accent flex-shrink-0 mt-0.5" />
           <div>
-            <p className="font-semibold text-primary mb-0.5">Payment Integration Status</p>
+            <p className="font-semibold text-primary mb-0.5">Payment Integration & Verification Status</p>
             <p className="text-secondary">
-              All core conversion tools in CONVET PULSE are <strong>100% free and functional</strong> in your browser.
-              The pricing shown ({priceLabel}) reflects the active server configuration. Automated payment gateway checkout is currently labeled as pending integration, and premium memberships are verified securely on the backend.
+              All 17 conversion tools in CONVET PULSE are <strong>100% free and functional</strong> in your browser with zero file uploads.
+              Premium subscriptions are handled through an authenticated Razorpay checkout with cryptographically verified HMAC signatures.
+              Active rate: {priceLabel}.
             </p>
           </div>
         </div>
@@ -210,6 +407,7 @@ export const PricingPage: React.FC = () => {
           {plans.map((plan) => {
             const price = billing === 'yearly' ? plan.yearlyPrice : plan.monthlyPrice;
             const period = billing === 'yearly' ? '/year' : '/month';
+            const isHighlighted = plan.popular || searchParams.get('plan') === plan.id;
 
             return (
               <div
@@ -217,8 +415,8 @@ export const PricingPage: React.FC = () => {
                 className="relative flex flex-col rounded-2xl border overflow-hidden transition-all duration-200"
                 style={{
                   backgroundColor: 'var(--card)',
-                  borderColor: plan.popular ? plan.color : 'var(--border)',
-                  boxShadow: plan.popular ? `0 0 0 1px ${plan.color}, 0 8px 30px rgba(0,0,0,0.06)` : 'var(--shadow-sm)',
+                  borderColor: isHighlighted ? plan.color : 'var(--border)',
+                  boxShadow: isHighlighted ? `0 0 0 1px ${plan.color}, 0 8px 30px rgba(0,0,0,0.06)` : 'var(--shadow-sm)',
                 }}
               >
                 {plan.popular && (
@@ -254,17 +452,50 @@ export const PricingPage: React.FC = () => {
                     )}
                   </div>
 
-                  {/* CTA */}
-                  <Link
-                    to={plan.ctaHref}
-                    className={`btn-lg w-full justify-center mb-6 text-xs font-semibold gap-2 ${
-                      plan.popular ? 'btn-primary' : 'btn-secondary'
-                    }`}
-                    style={plan.popular ? { backgroundColor: plan.color } : {}}
-                  >
-                    {plan.cta}
-                    <ArrowRight size={14} />
-                  </Link>
+                  {/* CTA Button */}
+                  {plan.id === 'free' ? (
+                    <Link
+                      to={plan.ctaHref || '/tools'}
+                      className="btn-lg w-full justify-center mb-6 text-xs font-semibold gap-2 btn-secondary"
+                    >
+                      {plan.cta}
+                      <ArrowRight size={14} />
+                    </Link>
+                  ) : plan.id === 'business' ? (
+                    <Link
+                      to={plan.ctaHref || '/help'}
+                      className="btn-lg w-full justify-center mb-6 text-xs font-semibold gap-2 btn-secondary"
+                    >
+                      {plan.cta}
+                      <ArrowRight size={14} />
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={isUserPremium || (checkoutStatus === 'creating' && activePlanId === plan.id)}
+                      onClick={() => handleSubscribeClick(plan.id)}
+                      className={`btn-lg w-full justify-center mb-6 text-xs font-semibold gap-2 ${
+                        isUserPremium
+                          ? 'bg-success-600 text-white cursor-default'
+                          : plan.popular
+                          ? 'btn-primary'
+                          : 'btn-secondary'
+                      }`}
+                      style={plan.popular && !isUserPremium ? { backgroundColor: plan.color } : {}}
+                    >
+                      {checkoutStatus === 'creating' && activePlanId === plan.id ? (
+                        <>
+                          <Loader2 size={14} className="animate-spin" />
+                          <span>Preparing Checkout...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>{plan.cta}</span>
+                          {!isUserPremium && <ArrowRight size={14} />}
+                        </>
+                      )}
+                    </button>
+                  )}
 
                   {/* Features */}
                   <ul className="space-y-2.5 pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
@@ -299,7 +530,7 @@ export const PricingPage: React.FC = () => {
             { icon: <Shield size={18} />, text: '100% Client-Side Privacy', color: '#22c55e' },
             { icon: <Zap size={18} />, text: 'Zero File Tracking', color: '#5b6af8' },
             { icon: <Check size={18} />, text: 'Offline PWA Support', color: '#f59e0b' },
-            { icon: <Shield size={18} />, text: 'Encrypted Backend APIs', color: '#8b5cf6' },
+            { icon: <Shield size={18} />, text: 'HMAC Cryptographic Verification', color: '#8b5cf6' },
           ].map((item) => (
             <div key={item.text} className="flex items-center gap-2.5">
               <span style={{ color: item.color }}>{item.icon}</span>

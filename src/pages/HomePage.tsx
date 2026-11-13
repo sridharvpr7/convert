@@ -825,15 +825,6 @@ const PremiumCTA: React.FC = () => {
 // Footer
 // ────────────────────────────────────────────────
 const Footer: React.FC = () => {
-  const footerLinks = {
-    'PDF Tools': ['Merge PDF', 'Split PDF', 'Compress PDF', 'Rotate PDF', 'JPG to PDF', 'PDF to Text'],
-    'Image Tools': ['Image Converter', 'Image Compressor', 'Image Resize', 'Image Crop'],
-    'Data & Utilities': ['CSV to Excel', 'Excel to CSV', 'JSON to CSV', 'CSV to JSON', 'QR Code Generator'],
-    'Archive': ['ZIP Compressor', 'ZIP Extractor'],
-    'Company': ['About', 'Pricing', 'Status'],
-    'Legal': ['Privacy Policy', 'Terms of Service', 'Cookie Policy', 'GDPR'],
-  };
-
   return (
     <footer
       className="border-t"
@@ -842,7 +833,7 @@ const Footer: React.FC = () => {
       <div className="container-app py-12">
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-8">
           {/* Brand */}
-          <div className="col-span-2 md:col-span-3 lg:col-span-1">
+          <div className="col-span-2 md:col-span-3 lg:col-span-2">
             <div className="flex items-center gap-2 mb-3">
               <svg width="24" height="24" viewBox="0 0 32 32" fill="none">
                 <rect width="32" height="32" rx="8" fill="var(--accent)" />
@@ -851,38 +842,80 @@ const Footer: React.FC = () => {
                 <path d="M23 19L19 23L15 19" stroke="rgba(255,255,255,0.65)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                 <path d="M19 23V11" stroke="rgba(255,255,255,0.65)" strokeWidth="2" strokeLinecap="round" />
               </svg>
-              <span className="font-bold text-primary">CONVETER</span>
+              <span className="font-bold text-primary">CONVET PULSE</span>
             </div>
-            <p className="text-xs text-muted-cv leading-relaxed mb-4">
-              Convert. Create. Analyze. Simplify.
-              Everything you need to work with files.
+            <p className="text-xs text-muted-cv leading-relaxed mb-4 max-w-sm">
+              Fast, client-side offline file conversions, document processors, and developer utilities.
+              Developed and maintained by the CONVET PULSE project developer.
             </p>
             <div className="flex items-center gap-2">
-              <span
-                className="w-2 h-2 rounded-full bg-success-500 animate-pulse"
-              />
-              <span className="text-xs text-muted-cv">All systems operational</span>
+              <span className="w-2 h-2 rounded-full bg-success-500 animate-pulse" />
+              <span className="text-xs text-muted-cv">All 17 tools operational · 100% Client-Side Privacy</span>
             </div>
           </div>
 
-          {/* Links */}
-          {Object.entries(footerLinks).map(([section, links]) => (
-            <div key={section}>
-              <p className="text-xs font-semibold text-primary mb-3">{section}</p>
-              <ul className="space-y-2">
-                {links.map((link) => (
-                  <li key={link}>
-                    <a
-                      href="#"
-                      className="text-xs text-muted-cv hover:text-primary transition-colors duration-150"
-                    >
-                      {link}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+          {/* PDF Tools */}
+          <div>
+            <p className="text-xs font-semibold text-primary mb-3">PDF Tools</p>
+            <ul className="space-y-2 text-xs text-muted-cv">
+              <li><Link to="/tool/pdf-merge" className="hover:text-primary transition-colors">Merge PDF</Link></li>
+              <li><Link to="/tool/pdf-split" className="hover:text-primary transition-colors">Split PDF</Link></li>
+              <li><Link to="/tool/pdf-rotate" className="hover:text-primary transition-colors">Rotate PDF</Link></li>
+              <li><Link to="/tool/jpg-to-pdf" className="hover:text-primary transition-colors">JPG to PDF</Link></li>
+            </ul>
+          </div>
+
+          {/* Image & Data */}
+          <div>
+            <p className="text-xs font-semibold text-primary mb-3">Image & Data</p>
+            <ul className="space-y-2 text-xs text-muted-cv">
+              <li><Link to="/tool/image-converter" className="hover:text-primary transition-colors">Image Converter</Link></li>
+              <li><Link to="/tool/image-compressor" className="hover:text-primary transition-colors">Compress Image</Link></li>
+              <li><Link to="/tool/csv-to-json" className="hover:text-primary transition-colors">CSV to JSON</Link></li>
+              <li><Link to="/tool/json-to-csv" className="hover:text-primary transition-colors">JSON to CSV</Link></li>
+              <li><Link to="/tool/qr-generator" className="hover:text-primary transition-colors">QR Generator</Link></li>
+            </ul>
+          </div>
+
+          {/* Product & Docs */}
+          <div>
+            <p className="text-xs font-semibold text-primary mb-3">Documentation</p>
+            <ul className="space-y-2 text-xs text-muted-cv">
+              <li><Link to="/help" className="hover:text-primary transition-colors font-medium text-accent">User Manual / Help</Link></li>
+              <li><Link to="/help#privacy" className="hover:text-primary transition-colors">Privacy Architecture</Link></li>
+              <li><Link to="/help#tools" className="hover:text-primary transition-colors">Tool Guide</Link></li>
+              <li><Link to="/help#faq" className="hover:text-primary transition-colors">FAQ</Link></li>
+              <li><Link to="/pricing" className="hover:text-primary transition-colors">Pricing & Plans</Link></li>
+            </ul>
+          </div>
+
+          {/* Developer & Portfolio */}
+          <div>
+            <p className="text-xs font-semibold text-primary mb-3">Developer</p>
+            <ul className="space-y-2 text-xs text-muted-cv">
+              <li>
+                <a
+                  href="https://sridharvpr-portfolio.onrender.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-primary transition-colors font-medium text-accent inline-flex items-center gap-1"
+                >
+                  Developer Portfolio ↗
+                </a>
+              </li>
+              <li>
+                <a
+                  href="https://github.com/sridharvpr7/convert.git"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-primary transition-colors"
+                >
+                  GitHub Repository ↗
+                </a>
+              </li>
+              <li><Link to="/admin" className="hover:text-primary transition-colors">Admin Console</Link></li>
+            </ul>
+          </div>
         </div>
 
         {/* Bottom bar */}
@@ -891,12 +924,20 @@ const Footer: React.FC = () => {
           style={{ borderColor: 'var(--border)' }}
         >
           <p className="text-xs text-muted-cv">
-            © {new Date().getFullYear()} CONVETER. All rights reserved.
+            © {new Date().getFullYear()} CONVET PULSE. Developed and maintained by the CONVET PULSE project developer. All rights reserved.
           </p>
           <div className="flex items-center gap-4 text-xs text-muted-cv">
-            <a href="#" className="hover:text-primary transition-colors">Privacy</a>
-            <a href="#" className="hover:text-primary transition-colors">Terms</a>
-            <a href="#" className="hover:text-primary transition-colors">Cookies</a>
+            <Link to="/help#privacy" className="hover:text-primary transition-colors">Privacy Architecture</Link>
+            <Link to="/help" className="hover:text-primary transition-colors">User Manual</Link>
+            <Link to="/pricing" className="hover:text-primary transition-colors">Pricing</Link>
+            <a
+              href="https://sridharvpr-portfolio.onrender.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent hover:underline font-medium"
+            >
+              Developer Portfolio
+            </a>
           </div>
         </div>
       </div>

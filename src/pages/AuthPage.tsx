@@ -11,6 +11,7 @@ import {
   updateProfile,
 } from 'firebase/auth';
 import { googleProvider, requireFirebaseAuth } from '@/lib/firebase';
+import { apiClient } from '@/lib/api';
 import { useAppStore } from '@/store/app.store';
 
 interface AuthPageProps {
@@ -50,6 +51,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
     e.preventDefault();
     setError('');
     setLoading(true);
+    const redirectTarget = searchParams.get('redirect') || (searchParams.get('plan') ? `/pricing?plan=${encodeURIComponent(searchParams.get('plan') || '')}` : '/dashboard');
     try {
       const auth = requireFirebaseAuth();
       if (mode === 'reset' && password !== confirmPassword) {
@@ -57,13 +59,39 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
       }
       if (mode === 'login') {
         const credential = await signInWithEmailAndPassword(auth, email, password);
-        setUser({ id: credential.user.uid, name: credential.user.displayName || credential.user.email?.split('@')[0] || 'User', email: credential.user.email || '', avatar: credential.user.photoURL || undefined, plan: 'free' });
-        navigate('/dashboard');
+        const appUser = {
+          id: credential.user.uid,
+          name: credential.user.displayName || credential.user.email?.split('@')[0] || 'User',
+          email: credential.user.email || '',
+          avatar: credential.user.photoURL || undefined,
+          plan: 'free' as const,
+        };
+        setUser(appUser);
+        apiClient.notifyLogin({
+          userId: appUser.id,
+          name: appUser.name,
+          email: appUser.email,
+          provider: 'Email & Password',
+        }).catch(() => {});
+        navigate(redirectTarget);
       } else if (mode === 'register') {
         const credential = await createUserWithEmailAndPassword(auth, email, password);
         await updateProfile(credential.user, { displayName: name.trim() });
-        setUser({ id: credential.user.uid, name: name.trim(), email: credential.user.email || email, avatar: credential.user.photoURL || undefined, plan: 'free' });
-        navigate('/dashboard');
+        const appUser = {
+          id: credential.user.uid,
+          name: name.trim(),
+          email: credential.user.email || email,
+          avatar: credential.user.photoURL || undefined,
+          plan: 'free' as const,
+        };
+        setUser(appUser);
+        apiClient.notifyLogin({
+          userId: appUser.id,
+          name: appUser.name,
+          email: appUser.email,
+          provider: 'Registration',
+        }).catch(() => {});
+        navigate(redirectTarget);
       } else if (mode === 'forgot') {
         await sendPasswordResetEmail(auth, email);
         setSubmitted(true);
@@ -83,10 +111,24 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
   const handleGoogleSignIn = async () => {
     setError('');
     setLoading(true);
+    const redirectTarget = searchParams.get('redirect') || (searchParams.get('plan') ? `/pricing?plan=${encodeURIComponent(searchParams.get('plan') || '')}` : '/dashboard');
     try {
       const credential = await signInWithPopup(requireFirebaseAuth(), googleProvider);
-      setUser({ id: credential.user.uid, name: credential.user.displayName || 'User', email: credential.user.email || '', avatar: credential.user.photoURL || undefined, plan: 'free' });
-      navigate('/dashboard');
+      const appUser = {
+        id: credential.user.uid,
+        name: credential.user.displayName || 'User',
+        email: credential.user.email || '',
+        avatar: credential.user.photoURL || undefined,
+        plan: 'free' as const,
+      };
+      setUser(appUser);
+      apiClient.notifyLogin({
+        userId: appUser.id,
+        name: appUser.name,
+        email: appUser.email,
+        provider: 'Google',
+      }).catch(() => {});
+      navigate(redirectTarget);
     } catch (authError) {
       setError(readableAuthError(authError));
     } finally {
@@ -128,17 +170,17 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
               Everything you need to work with files
             </h2>
             <p className="text-secondary">
-              80+ tools. Local processing. AI-powered. Free to start.
+              17 essential tools. Fast local processing. Developed and maintained by the CONVET PULSE project developer.
             </p>
           </div>
 
           <div className="space-y-3">
             {[
-              '80+ conversion and editing tools',
-              'Process files locally — privacy first',
-              'Batch processing and workflow automation',
-              'AI-powered document analysis',
-              'Free plan with generous limits',
+              '17 high-performance conversion tools',
+              'Process files locally in your browser — privacy first',
+              'Batch processing and reproducible workflow pipelines',
+              'High-speed client-side document processing',
+              'Free community access with generous limits',
             ].map((f) => (
               <div key={f} className="flex items-center gap-3">
                 <CheckCircle2 size={16} style={{ color: '#22c55e', flexShrink: 0 }} />

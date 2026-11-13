@@ -4,6 +4,7 @@
 // telegram, premium configuration, site display controls, and analytics.
 // ============================================================
 
+import crypto from 'node:crypto';
 import { db } from './db.js';
 import { telegramService } from './telegram.js';
 import {
@@ -38,6 +39,19 @@ export async function handleApiRoute(req, res, url) {
   const method = req.method;
   const pathname = url.pathname;
 
+  // Determine secure CORS origin (never use wildcard with credentials)
+  const reqOrigin = req.headers.origin || '';
+  const allowedOrigins = [
+    'https://convetpulse.onrender.com',
+    'http://localhost:5000',
+    'http://localhost:5173',
+    'http://localhost:3000',
+    process.env.APP_URL,
+  ].filter(Boolean);
+
+  const isAllowedOrigin = allowedOrigins.includes(reqOrigin) || (reqOrigin && reqOrigin.endsWith('.onrender.com'));
+  const safeCorsOrigin = isAllowedOrigin ? reqOrigin : (allowedOrigins[0] || 'https://convetpulse.onrender.com');
+
   // JSON responder helper
   const sendJson = (statusCode, data, extraHeaders = {}) => {
     res.writeHead(statusCode, {
@@ -46,7 +60,7 @@ export async function handleApiRoute(req, res, url) {
       'X-Frame-Options': 'SAMEORIGIN',
       'X-XSS-Protection': '1; mode=block',
       'Referrer-Policy': 'strict-origin-when-cross-origin',
-      'Access-Control-Allow-Origin': req.headers.origin || '*',
+      'Access-Control-Allow-Origin': safeCorsOrigin,
       'Access-Control-Allow-Credentials': 'true',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Telegram-Bot-Api-Secret-Token, X-Admin-Token',
@@ -55,7 +69,8 @@ export async function handleApiRoute(req, res, url) {
     res.end(JSON.stringify(data));
   };
 
-  // Helper to read JSON body
+  // Helper to read raw & parsed JSON body
+  let rawBody = '';
   const readBody = () =>
     new Promise((resolve) => {
       let data = '';
@@ -67,6 +82,7 @@ export async function handleApiRoute(req, res, url) {
         }
       });
       req.on('end', () => {
+        rawBody = data;
         try {
           resolve(data ? JSON.parse(data) : {});
         } catch {
@@ -259,6 +275,288 @@ export async function handleApiRoute(req, res, url) {
       restricted: isRestricted,
       visible: isToolVisible(toolSlug),
     });
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // 5b. Razorpay Payments & Entitlements
+  // ─────────────────────────────────────────────────────────
+  if (pathname === '/api/payment/config' && method === 'GET') {
+    const keyId = process.env.RAZORPAY_KEY_ID || '';
+    const isConfigured = Boolean(keyId && process.env.RAZORPAY_KEY_SECRET);
+    const premConfig = getPremiumConfig();
+    return sendJson(200, {
+      enabled: isConfigured && (premConfig?.premium?.enabled ?? true),
+      configured: isConfigured,
+      keyId: keyId,
+      currency: premConfig?.premium?.price?.currency || 'INR',
+      amount: premConfig?.premium?.price?.amount || 499,
+      isTestMode: keyId.startsWith('rzp_test_'),
+    });
+  }
+
+  if (pathname === '/api/payment/create-order' && method === 'POST') {
+    const keyId = process.env.RAZORPAY_KEY_ID || '';
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
+
+    if (!keyId || !keySecret) {
+      return sendJson(503, {
+        error: 'Razorpay payment gateway is not configured. Please configure RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in Render environment variables.',
+        configured: false,
+      });
+    }
+
+    const body = await readBody();
+    const userId = body?.userId;
+    const userEmail = body?.userEmail || null;
+    const plan = (body?.plan || 'pro').toLowerCase();
+
+    if (!userId) {
+      return sendJson(401, { error: 'Authentication required to create a payment order' });
+    }
+
+    // Amount and currency derived strictly from trusted server configuration
+    const premConfig = getPremiumConfig();
+    const amountInRupees = premConfig?.premium?.price?.amount || 499;
+    const currency = premConfig?.premium?.price?.currency || 'INR';
+    const amountInPaise = Math.round(amountInRupees * 100);
+    const receipt = `rcpt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+
+    try {
+      let rzpData;
+      if (keyId.startsWith('rzp_test_mock')) {
+        rzpData = {
+          id: `order_mock_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+          amount: amountInPaise,
+          currency,
+          status: 'created',
+        };
+      } else {
+        const authHeader = 'Basic ' + Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+        const rzpRes = await fetch('https://api.razorpay.com/v1/orders', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': authHeader,
+          },
+          body: JSON.stringify({
+            amount: amountInPaise,
+            currency,
+            receipt,
+            notes: {
+              userId: String(userId),
+              userEmail: userEmail || '',
+              plan,
+            },
+          }),
+        });
+
+        rzpData = await rzpRes.json();
+        if (!rzpRes.ok) {
+          console.error('[Razorpay Order Creation Error]', rzpData);
+          return sendJson(502, { error: rzpData.error?.description || 'Failed to create Razorpay order' });
+        }
+      }
+
+      db.createPaymentOrder({
+        orderId: rzpData.id,
+        userId: String(userId),
+        userEmail,
+        plan,
+        amount: amountInPaise,
+        currency,
+      });
+
+      return sendJson(200, {
+        success: true,
+        ok: true,
+        orderId: rzpData.id,
+        amount: rzpData.amount,
+        currency: rzpData.currency,
+        keyId,
+        plan,
+      });
+    } catch (err) {
+      console.error('[Payment API Error]', err.message);
+      return sendJson(500, { error: 'Internal payment gateway communication error' });
+    }
+  }
+
+  if (pathname === '/api/payment/verify-payment' && method === 'POST') {
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
+    if (!keySecret) {
+      return sendJson(503, { error: 'Payment verification unavailable: gateway secrets not configured.' });
+    }
+
+    const body = await readBody();
+    const razorpay_order_id = body?.razorpay_order_id || body?.orderId;
+    const razorpay_payment_id = body?.razorpay_payment_id || body?.paymentId;
+    const razorpay_signature = body?.razorpay_signature || body?.signature;
+    const userId = body?.userId;
+
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return sendJson(400, { success: false, ok: false, error: 'Missing required Razorpay payment signature parameters' });
+    }
+
+    // Cryptographic HMAC SHA256 verification
+    const expectedSignature = crypto
+      .createHmac('sha256', keySecret)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest('hex');
+
+    let isValidSignature = false;
+    try {
+      isValidSignature = crypto.timingSafeEqual(
+        Buffer.from(expectedSignature, 'hex'),
+        Buffer.from(razorpay_signature, 'hex')
+      );
+    } catch {
+      isValidSignature = false;
+    }
+
+    if (!isValidSignature) {
+      db.addAuditLog('payment_verification_failed', userId || 'anonymous', {
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        reason: 'HMAC signature mismatch',
+      });
+      return sendJson(400, { success: false, ok: false, error: 'Invalid payment signature verification' });
+    }
+
+    const order = db.getPaymentOrderByOrderId(razorpay_order_id);
+    if (!order) {
+      return sendJson(404, { success: false, ok: false, error: 'Payment order record not found' });
+    }
+
+    if (userId && order.user_id && order.user_id !== userId) {
+      return sendJson(403, { success: false, ok: false, error: 'Payment order does not belong to the authenticated user' });
+    }
+
+    // Idempotent processing
+    if (order.status === 'paid') {
+      return sendJson(200, {
+        success: true,
+        ok: true,
+        status: 'active',
+        plan: order.plan,
+        alreadyProcessed: true,
+        message: 'Payment was already verified successfully.',
+      });
+    }
+
+    db.markPaymentSuccess({
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      signature: razorpay_signature,
+    });
+
+    const targetUser = order.user_id || userId;
+    const entitlement = db.grantPremiumEntitlement({
+      userId: targetUser,
+      plan: order.plan,
+      amountPaid: order.amount / 100,
+      currency: order.currency,
+    });
+
+    db.addAuditLog('payment_verified', targetUser, {
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      amount: order.amount / 100,
+      currency: order.currency,
+    });
+
+    telegramService.notifyPaymentReceived({
+      user_id: targetUser,
+      user_email: order.user_email,
+      order_id: razorpay_order_id,
+      amount: order.amount,
+      currency: order.currency,
+      plan: order.plan,
+    }).catch(() => {});
+
+    return sendJson(200, {
+      success: true,
+      ok: true,
+      status: 'active',
+      plan: entitlement.plan,
+      message: 'Payment verified successfully. Premium Pro membership is now active!',
+    });
+  }
+
+  if (pathname === '/api/payment/webhook' && method === 'POST') {
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
+    const receivedSig = req.headers['x-razorpay-signature'];
+    const body = await readBody();
+
+    if (webhookSecret && receivedSig) {
+      const expectedSig = crypto
+        .createHmac('sha256', webhookSecret)
+        .update(rawBody)
+        .digest('hex');
+
+      let isValid = false;
+      try {
+        isValid = crypto.timingSafeEqual(Buffer.from(expectedSig, 'hex'), Buffer.from(receivedSig, 'hex'));
+      } catch {
+        isValid = false;
+      }
+
+      if (!isValid) {
+        return sendJson(400, { error: 'Invalid webhook signature' });
+      }
+    }
+
+    const event = body?.event;
+    if (event === 'payment.captured' || event === 'order.paid') {
+      const paymentEntity = body?.payload?.payment?.entity;
+      const orderId = paymentEntity?.order_id;
+      const paymentId = paymentEntity?.id;
+      if (orderId && paymentId) {
+        const order = db.getPaymentOrderByOrderId(orderId);
+        if (order && order.status !== 'paid') {
+          db.markPaymentSuccess({ orderId, paymentId, signature: 'webhook' });
+          db.grantPremiumEntitlement({
+            userId: order.user_id,
+            plan: order.plan,
+            amountPaid: order.amount / 100,
+            currency: order.currency,
+          });
+        }
+      }
+    }
+
+    return sendJson(200, { status: 'ok' });
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // 5c. User Auth Events & Usage Tracking
+  // ─────────────────────────────────────────────────────────
+  if (pathname === '/api/auth/login-event' && method === 'POST') {
+    const body = await readBody();
+    const { email, name, provider, userId } = body || {};
+    if (!userId && !email) {
+      return sendJson(400, { error: 'User identifier required' });
+    }
+    await telegramService.notifySuccessfulLogin({ id: userId || email, name, email }, provider || 'Email & Password').catch(() => {});
+    return sendJson(200, { ok: true, success: true });
+  }
+
+  if (pathname === '/api/auth/app-open' && method === 'POST') {
+    const body = await readBody();
+    const { userId, name, email } = body || {};
+    if (!userId) {
+      return sendJson(400, { error: 'Authenticated userId required' });
+    }
+    const notified = await telegramService.notifyAppOpen({ id: userId, name, email });
+    return sendJson(200, { ok: true, success: true, notified: Boolean(notified), deduplicated: !notified });
+  }
+
+  if (pathname === '/api/user/usage' && method === 'GET') {
+    const userId = url.searchParams.get('userId');
+    if (!userId) {
+      return sendJson(400, { error: 'userId parameter is required' });
+    }
+    const usage = db.getUserUsageStats(userId);
+    return sendJson(200, { usage });
   }
 
   // ─────────────────────────────────────────────────────────
@@ -556,13 +854,23 @@ export async function handleApiRoute(req, res, url) {
       completed_at: nowIso,
     });
 
+    let usageStats = null;
     if (updated) {
-      telegramService.notifyConversionCompleted(updated).catch((err) => {
+      // Persistent scoped usage tracking (idempotent, only for genuine successful completions)
+      const userId = updated.user_id || body.userId || 'anonymous';
+      usageStats = db.recordSuccessfulUsage({
+        userId,
+        actionSlug: updated.tool_slug,
+        actionCategory: updated.category || 'conversion',
+        jobId: updated.id,
+      });
+
+      telegramService.notifyConversionCompleted(updated, usageStats).catch((err) => {
         console.error('[API] notifyConversionCompleted failed:', err.message);
       });
     }
 
-    return sendJson(200, { job: updated });
+    return sendJson(200, { job: updated, usage: usageStats });
   }
 
   if (pathname === '/api/jobs/fail' && method === 'POST') {

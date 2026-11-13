@@ -46,6 +46,15 @@ export interface ApiAuditLog {
   created_at: string;
 }
 
+export interface PaymentConfig {
+  enabled: boolean;
+  configured: boolean;
+  keyId: string;
+  currency: string;
+  amount: number;
+  isTestMode: boolean;
+}
+
 export interface ApiNotificationLog {
   id: string;
   event_type: string;
@@ -643,5 +652,105 @@ export const apiClient = {
     } catch {
       // safe ignore
     }
+  },
+
+  /**
+   * Razorpay Payment Gateway Configuration
+   */
+  async getPaymentConfig(): Promise<PaymentConfig> {
+    const res = await safeFetch<PaymentConfig>('/api/payment/config');
+    return res || { enabled: false, configured: false, keyId: '', currency: 'INR', amount: 499, isTestMode: false };
+  },
+
+  /**
+   * Create Razorpay Payment Order
+   */
+  async createPaymentOrder(userId: string, userEmail?: string, plan: string = 'pro'): Promise<{ ok: boolean; success: boolean; orderId?: string; amount?: number; currency?: string; keyId?: string; error?: string }> {
+    try {
+      const res = await fetch(`${API_BASE}/api/payment/create-order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, userEmail, plan }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, success: false, error: data.error || 'Failed to create payment order' };
+      }
+      return { ok: true, success: true, orderId: data.orderId, amount: data.amount, currency: data.currency, keyId: data.keyId };
+    } catch {
+      return { ok: false, success: false, error: 'Network error communicating with payment gateway' };
+    }
+  },
+
+  /**
+   * Verify Razorpay Payment Signature
+   */
+  async verifyPayment(params: {
+    orderId?: string;
+    paymentId?: string;
+    signature?: string;
+    razorpay_order_id?: string;
+    razorpay_payment_id?: string;
+    razorpay_signature?: string;
+    userId: string;
+  }): Promise<{ ok: boolean; success: boolean; status?: string; plan?: string; error?: string }> {
+    try {
+      const payload = {
+        razorpay_order_id: params.razorpay_order_id || params.orderId,
+        razorpay_payment_id: params.razorpay_payment_id || params.paymentId,
+        razorpay_signature: params.razorpay_signature || params.signature,
+        userId: params.userId,
+      };
+      const res = await fetch(`${API_BASE}/api/payment/verify-payment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, success: false, error: data.error || 'Payment signature verification failed' };
+      }
+      return { ok: true, success: true, status: data.status, plan: data.plan };
+    } catch {
+      return { ok: false, success: false, error: 'Network error verifying payment signature' };
+    }
+  },
+
+  /**
+   * Notify Telegram of Successful Explicit Login
+   */
+  async notifyLogin(params: { userId?: string; email?: string; name?: string; provider?: string }): Promise<void> {
+    try {
+      await fetch(`${API_BASE}/api/auth/login-event`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+    } catch {
+      // safe ignore
+    }
+  },
+
+  /**
+   * Notify Telegram of Authenticated User Visit
+   */
+  async notifyAppOpen(params: { userId: string; email?: string; name?: string }): Promise<void> {
+    try {
+      await fetch(`${API_BASE}/api/auth/app-open`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+    } catch {
+      // safe ignore
+    }
+  },
+
+  /**
+   * Get User Usage Stats
+   */
+  async getUserUsage(userId: string): Promise<{ totalSuccessful: number; byAction: Record<string, number> } | null> {
+    const res = await safeFetch<{ usage: { totalSuccessful: number; byAction: Record<string, number> } }>(`/api/user/usage?userId=${encodeURIComponent(userId)}`);
+    return res ? res.usage : null;
   },
 };

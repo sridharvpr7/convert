@@ -108,6 +108,7 @@ export const Header: React.FC = () => {
     { label: 'Utilities', href: '/tools/utilities', show: siteDisplayConfig?.categories?.utilities?.visible !== false },
     { label: 'Archive', href: '/tools/archive', show: siteDisplayConfig?.categories?.archive?.visible !== false },
     { label: 'Pricing', href: '/pricing', show: siteDisplayConfig?.navigation?.showPricing !== false },
+    { label: 'Manual', href: '/help', show: true },
   ].filter((item) => item.show);
 
   // Offset calculation for banners

@@ -25,6 +25,7 @@ import { FavoritesPage } from '@/pages/FavoritesPage';
 import { WorkflowsPage } from '@/pages/WorkflowsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { AdminPage } from '@/pages/AdminPage';
+import { HelpPage } from '@/pages/HelpPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 
 // UI Providers & Client
@@ -251,6 +252,22 @@ const AppRoutes: React.FC = () => {
             </PageWrapper>
           }
         />
+        <Route
+          path="/help"
+          element={
+            <PageWrapper>
+              <HelpPage />
+            </PageWrapper>
+          }
+        />
+        <Route
+          path="/manual"
+          element={
+            <PageWrapper>
+              <HelpPage />
+            </PageWrapper>
+          }
+        />
 
         {/* Auth pages — no header (standalone layout) */}
         <Route
@@ -396,6 +413,18 @@ const App: React.FC = () => {
           deviceInfo: `${navigator.platform || 'Desktop'}`,
         }).catch(() => {});
         apiClient.pingVisitor(appUser.id, true, appUser.id).catch(() => {});
+
+        // Authenticated app-open notification with 15-minute client-side deduplication
+        const lastAppOpen = Number(sessionStorage.getItem('conveter_last_app_open') || 0);
+        const now = Date.now();
+        if (now - lastAppOpen > 15 * 60 * 1000) {
+          sessionStorage.setItem('conveter_last_app_open', String(now));
+          apiClient.notifyAppOpen({
+            userId: appUser.id,
+            name: appUser.name || 'User',
+            email: appUser.email,
+          }).catch(() => {});
+        }
       }
     });
   }, [setUser, setPremiumConfig, setSiteDisplayConfig]);

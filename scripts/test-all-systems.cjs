@@ -608,6 +608,231 @@ async function runTests() {
     assert(typeof stats.deliverySuccessRate === 'number');
   });
 
+  // ── 7. Full-Stack Feature Upgrade & Security Verification ──
+  console.log('\n--- 7. Feature Upgrade & Security Verification ---');
+
+  await testAsync('Telegram: POST /api/auth/login-event notifies admin of successful login', async () => {
+    const mock = mockRequest('POST', '/api/auth/login-event', {
+      userId: 'usr_test_123',
+      name: 'Alice Developer',
+      email: 'alice@example.com',
+      provider: 'google',
+    });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/auth/login-event'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 200);
+    assert.strictEqual(result.data.success, true);
+  });
+
+  await testAsync('Telegram: POST /api/auth/app-open respects 15-minute deduplication', async () => {
+    const mock1 = mockRequest('POST', '/api/auth/app-open', {
+      userId: 'usr_dedup_test',
+      name: 'Bob Tester',
+      email: 'bob@example.com',
+    });
+    await handleApiRoute(mock1.req, mock1.res, new URL('http://localhost/api/auth/app-open'));
+    const res1 = mock1.getResult();
+    assert.strictEqual(res1.status, 200);
+    assert.strictEqual(res1.data.notified, true);
+
+    // Second call within 15 minutes must be deduplicated
+    const mock2 = mockRequest('POST', '/api/auth/app-open', {
+      userId: 'usr_dedup_test',
+      name: 'Bob Tester',
+      email: 'bob@example.com',
+    });
+    await handleApiRoute(mock2.req, mock2.res, new URL('http://localhost/api/auth/app-open'));
+    const res2 = mock2.getResult();
+    assert.strictEqual(res2.status, 200);
+    assert.strictEqual(res2.data.notified, false);
+    assert.strictEqual(res2.data.deduplicated, true);
+  });
+
+  await testAsync('Usage Tracking: Idempotent successful conversion counting', async () => {
+    const testUserId = `user_usage_${Date.now()}`;
+    const eventId = `evt_${Date.now()}_1`;
+
+    // 1st recording
+    const rec1 = db.recordSuccessfulUsage({
+      userId: testUserId,
+      actionSlug: 'split-pdf',
+      actionCategory: 'pdf',
+      jobId: 'job_test_usage_1',
+      eventId,
+    });
+    assert.strictEqual(rec1.success, true);
+    assert.strictEqual(rec1.duplicate, false);
+
+    // Duplicate recording with identical eventId must be ignored idempotently
+    const rec2 = db.recordSuccessfulUsage({
+      userId: testUserId,
+      actionSlug: 'split-pdf',
+      actionCategory: 'pdf',
+      jobId: 'job_test_usage_1',
+      eventId,
+    });
+    assert.strictEqual(rec2.duplicate, true);
+
+    // Check stats
+    const stats = db.getUserUsageStats(testUserId);
+    assert.strictEqual(stats.totalSuccessful, 1);
+    assert.strictEqual(stats.byAction['split-pdf'], 1);
+
+    // API check
+    const mock = mockRequest('GET', `/api/user/usage?userId=${testUserId}`);
+    await handleApiRoute(mock.req, mock.res, new URL(`http://localhost/api/user/usage?userId=${testUserId}`));
+    const res = mock.getResult();
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.data.usage.totalSuccessful, 1);
+    assert.strictEqual(res.data.usage.byAction['split-pdf'], 1);
+  });
+
+  await testAsync('Payments: GET /api/payment/config returns sanitized gateway state', async () => {
+    const mock = mockRequest('GET', '/api/payment/config');
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/payment/config'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 200);
+    assert.strictEqual(typeof result.data.enabled, 'boolean');
+    assert.strictEqual(result.data.currency, 'INR');
+    assert.strictEqual(result.data.keySecret, undefined, 'Private key secret must never be exposed');
+  });
+
+  await testAsync('Payments: POST /api/payment/create-order creates order with server-controlled pricing', async () => {
+    process.env.RAZORPAY_KEY_ID = 'rzp_test_mock123';
+    process.env.RAZORPAY_KEY_SECRET = 'dev_secret_key_123';
+
+    const mock = mockRequest('POST', '/api/payment/create-order', {
+      userId: 'usr_order_test',
+      userEmail: 'order@test.com',
+      planId: 'premium',
+      amount: 1, // Tampered client attempt to pay 1 rupee
+    });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/payment/create-order'));
+    const result = mock.getResult();
+    assert.strictEqual(result.status, 200);
+    assert.strictEqual(result.data.success, true);
+    assert(result.data.orderId.startsWith('order_'));
+    // Server must enforce canonical price (19900 paise = 199 INR), rejecting tampered amount
+    assert.strictEqual(result.data.amount, 19900, 'Server must enforce canonical plan price');
+    assert.strictEqual(result.data.currency, 'INR');
+  });
+
+  await testAsync('Payments: POST /api/payment/verify-payment verifies HMAC SHA256 signature correctly', async () => {
+    process.env.RAZORPAY_KEY_ID = 'rzp_test_mock123';
+    process.env.RAZORPAY_KEY_SECRET = 'dev_secret_key_123';
+
+    const crypto = require('node:crypto');
+    const orderId = `order_test_${Date.now()}`;
+    const paymentId = `pay_test_${Date.now()}`;
+    const secret = process.env.RAZORPAY_KEY_SECRET || 'dev_secret_key_123';
+
+    // Store order in db
+    db.createPaymentOrder({
+      orderId,
+      userId: 'usr_verify_test',
+      userEmail: 'verify@test.com',
+      plan: 'premium',
+      planId: 'premium',
+      amount: 19900,
+      currency: 'INR',
+    });
+
+    // Valid HMAC SHA256 signature
+    const validSignature = crypto
+      .createHmac('sha256', secret)
+      .update(`${orderId}|${paymentId}`)
+      .digest('hex');
+
+    // 1. Test forged / invalid signature
+    const mockInvalid = mockRequest('POST', '/api/payment/verify-payment', {
+      orderId,
+      paymentId,
+      signature: 'invalid_forged_signature_hex',
+      userId: 'usr_verify_test',
+    });
+    await handleApiRoute(mockInvalid.req, mockInvalid.res, new URL('http://localhost/api/payment/verify-payment'));
+    const invalidResult = mockInvalid.getResult();
+    assert.strictEqual(invalidResult.status, 400);
+    assert.strictEqual(invalidResult.data.success, false);
+
+    // 2. Test valid signature
+    const mockValid = mockRequest('POST', '/api/payment/verify-payment', {
+      orderId,
+      paymentId,
+      signature: validSignature,
+      userId: 'usr_verify_test',
+    });
+    await handleApiRoute(mockValid.req, mockValid.res, new URL('http://localhost/api/payment/verify-payment'));
+    const validResult = mockValid.getResult();
+    // Check entitlement granted
+    const ent = db.getPremiumEntitlement('usr_verify_test');
+    assert(ent, 'Entitlement record must exist');
+    assert.strictEqual(ent.status, 'active');
+    assert.strictEqual(ent.plan, 'premium');
+  });
+
+  await testAsync('Payments: POST /api/payment/webhook verifies webhook signature & processes payment.captured', async () => {
+    process.env.RAZORPAY_WEBHOOK_SECRET = 'webhook_secret_key_999';
+    const crypto = require('node:crypto');
+
+    const webhookOrderId = `order_hook_${Date.now()}`;
+    const webhookPaymentId = `pay_hook_${Date.now()}`;
+
+    db.createPaymentOrder({
+      orderId: webhookOrderId,
+      userId: 'usr_webhook_test',
+      userEmail: 'webhook@test.com',
+      plan: 'premium',
+      amount: 19900,
+      currency: 'INR',
+    });
+
+    const payload = {
+      event: 'payment.captured',
+      payload: {
+        payment: {
+          entity: {
+            id: webhookPaymentId,
+            order_id: webhookOrderId,
+            amount: 19900,
+            currency: 'INR',
+            notes: {
+              userId: 'usr_webhook_test',
+            },
+          },
+        },
+      },
+    };
+
+    const rawPayload = JSON.stringify(payload);
+    const validSig = crypto
+      .createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET)
+      .update(rawPayload)
+      .digest('hex');
+
+    // 1. Invalid webhook signature test
+    const mockInvalid = mockRequest('POST', '/api/payment/webhook', payload, {
+      'x-razorpay-signature': 'invalid_signature_hex',
+    });
+    await handleApiRoute(mockInvalid.req, mockInvalid.res, new URL('http://localhost/api/payment/webhook'));
+    const invalidResult = mockInvalid.getResult();
+    assert.strictEqual(invalidResult.status, 400);
+
+    // 2. Valid webhook signature test
+    const mockValid = mockRequest('POST', '/api/payment/webhook', payload, {
+      'x-razorpay-signature': validSig,
+    });
+    await handleApiRoute(mockValid.req, mockValid.res, new URL('http://localhost/api/payment/webhook'));
+    const validResult = mockValid.getResult();
+    assert.strictEqual(validResult.status, 200);
+    assert.strictEqual(validResult.data.status, 'ok');
+
+    // Verify entitlement granted via webhook
+    const ent = db.getPremiumEntitlement('usr_webhook_test');
+    assert(ent, 'Webhook should grant entitlement');
+    assert.strictEqual(ent.status, 'active');
+  });
+
   // Summary
   console.log('\n========================================');
   console.log(`QA RESULTS: ${passed} passed, ${failed} failed`);

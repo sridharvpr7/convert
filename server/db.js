@@ -137,6 +137,39 @@ function initSqliteTables(db) {
       created_at TEXT NOT NULL,
       delivered_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS user_usage (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      action_slug TEXT NOT NULL,
+      action_category TEXT NOT NULL,
+      success_count INTEGER DEFAULT 0,
+      last_success_at TEXT NOT NULL,
+      UNIQUE(user_id, action_slug)
+    );
+
+    CREATE TABLE IF NOT EXISTS usage_events (
+      event_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      job_id TEXT,
+      action_slug TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS payments (
+      id TEXT PRIMARY KEY,
+      order_id TEXT UNIQUE NOT NULL,
+      payment_id TEXT,
+      signature TEXT,
+      user_id TEXT NOT NULL,
+      user_email TEXT,
+      plan TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'INR',
+      status TEXT NOT NULL DEFAULT 'created', -- 'created', 'paid', 'failed'
+      created_at TEXT NOT NULL,
+      paid_at TEXT
+    );
   `);
 
   // 2. Safe migrations for existing databases
@@ -166,10 +199,16 @@ function initSqliteTables(db) {
   runMigration('CREATE INDEX IF NOT EXISTS idx_jobs_tool_slug ON jobs(tool_slug)');
   runMigration('CREATE INDEX IF NOT EXISTS idx_jobs_user_id ON jobs(user_id)');
   runMigration('CREATE INDEX IF NOT EXISTS idx_notif_created_at ON notification_logs(created_at)');
+  runMigration('CREATE INDEX IF NOT EXISTS idx_user_usage_user_id ON user_usage(user_id)');
+  runMigration('CREATE INDEX IF NOT EXISTS idx_usage_events_event ON usage_events(event_id)');
+  runMigration('CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments(order_id)');
+  runMigration('CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id)');
 
   // 4. Initialize default notification settings if empty
   const defaultSettings = [
     ['notify_new_user', 'true'],
+    ['notify_user_login', 'true'],
+    ['notify_app_open', 'true'],
     ['notify_conversion_started', 'true'],
     ['notify_conversion_completed', 'true'],
     ['notify_conversion_failed', 'true'],
@@ -177,6 +216,7 @@ function initSqliteTables(db) {
     ['notify_system_errors', 'true'],
     ['notify_premium_access', 'true'],
     ['notify_admin_changes', 'true'],
+    ['notify_payment_received', 'true'],
   ];
 
   const stmt = db.prepare('INSERT OR IGNORE INTO notification_settings (key, value) VALUES (?, ?)');
@@ -196,8 +236,13 @@ let jsonStore = {
   admin_comments: [],
   audit_logs: [],
   notification_logs: [],
+  user_usage: [],
+  usage_events: [],
+  payments: [],
   notification_settings: {
     notify_new_user: 'true',
+    notify_user_login: 'true',
+    notify_app_open: 'true',
     notify_conversion_started: 'true',
     notify_conversion_completed: 'true',
     notify_conversion_failed: 'true',
@@ -205,6 +250,7 @@ let jsonStore = {
     notify_system_errors: 'true',
     notify_premium_access: 'true',
     notify_admin_changes: 'true',
+    notify_payment_received: 'true',
   },
 };
 
@@ -616,6 +662,232 @@ export const db = {
         revokedAccounts: revoked,
         totalVerifiedRevenue: verifiedPaid,
       };
+    }
+  },
+
+  // --- Persistent Usage Tracking (Idempotent & Scoped) ---
+  recordSuccessfulUsage({ userId, actionSlug, actionCategory = 'conversion', jobId = null, eventId = null }) {
+    if (!userId || !actionSlug) return { actionCount: 0, totalUserCount: 0, wasNewEvent: false };
+    const dedupeKey = eventId || (jobId ? `job_${jobId}` : `evt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
+    const now = new Date().toISOString();
+
+    if (sqliteDb) {
+      const existing = sqliteDb.prepare('SELECT event_id FROM usage_events WHERE event_id = ?').get(dedupeKey);
+      if (existing) {
+        const stats = this.getUserUsageStats(userId);
+        return {
+          success: true,
+          duplicate: true,
+          wasNewEvent: false,
+          actionCount: stats.byAction[actionSlug] || 0,
+          totalUserCount: stats.totalSuccessful || 0,
+        };
+      }
+
+      sqliteDb.prepare('INSERT INTO usage_events (event_id, user_id, job_id, action_slug, created_at) VALUES (?, ?, ?, ?, ?)').run(
+        dedupeKey, userId, jobId, actionSlug, now
+      );
+
+      const usageId = `usage_${userId}_${actionSlug}`;
+      sqliteDb.prepare(`
+        INSERT INTO user_usage (id, user_id, action_slug, action_category, success_count, last_success_at)
+        VALUES (?, ?, ?, ?, 1, ?)
+        ON CONFLICT(user_id, action_slug) DO UPDATE SET
+          success_count = success_count + 1,
+          last_success_at = excluded.last_success_at
+      `).run(usageId, userId, actionSlug, actionCategory, now);
+
+      const stats = this.getUserUsageStats(userId);
+      return {
+        success: true,
+        duplicate: false,
+        wasNewEvent: true,
+        actionCount: stats.byAction[actionSlug] || 1,
+        totalUserCount: stats.totalSuccessful || 1,
+      };
+    } else {
+      if (!jsonStore.usage_events) jsonStore.usage_events = [];
+      if (!jsonStore.user_usage) jsonStore.user_usage = [];
+
+      const existing = jsonStore.usage_events.find((e) => e.event_id === dedupeKey);
+      if (existing) {
+        const stats = this.getUserUsageStats(userId);
+        return {
+          success: true,
+          duplicate: true,
+          wasNewEvent: false,
+          actionCount: stats.byAction[actionSlug] || 0,
+          totalUserCount: stats.totalSuccessful || 0,
+        };
+      }
+
+      jsonStore.usage_events.push({ event_id: dedupeKey, user_id: userId, job_id: jobId, action_slug: actionSlug, created_at: now });
+      const record = jsonStore.user_usage.find((u) => u.user_id === userId && u.action_slug === actionSlug);
+      if (record) {
+        record.success_count = (record.success_count || 0) + 1;
+        record.last_success_at = now;
+      } else {
+        jsonStore.user_usage.push({
+          id: `usage_${userId}_${actionSlug}`,
+          user_id: userId,
+          action_slug: actionSlug,
+          action_category: actionCategory,
+          success_count: 1,
+          last_success_at: now,
+        });
+      }
+      persistJsonStore();
+      const stats = this.getUserUsageStats(userId);
+      return {
+        success: true,
+        duplicate: false,
+        wasNewEvent: true,
+        actionCount: stats.byAction[actionSlug] || 1,
+        totalUserCount: stats.totalSuccessful || 1,
+      };
+    }
+  },
+
+  getUserUsageStats(userId) {
+    if (!userId) return { totalSuccessful: 0, byAction: {} };
+    if (sqliteDb) {
+      const rows = sqliteDb.prepare('SELECT action_slug, success_count FROM user_usage WHERE user_id = ?').all(userId);
+      const byAction = {};
+      let totalSuccessful = 0;
+      for (const r of rows) {
+        byAction[r.action_slug] = r.success_count;
+        totalSuccessful += r.success_count;
+      }
+      return { totalSuccessful, byAction };
+    } else {
+      if (!jsonStore.user_usage) jsonStore.user_usage = [];
+      const userRows = jsonStore.user_usage.filter((u) => u.user_id === userId);
+      const byAction = {};
+      let totalSuccessful = 0;
+      for (const r of userRows) {
+        byAction[r.action_slug] = r.success_count;
+        totalSuccessful += r.success_count;
+      }
+      return { totalSuccessful, byAction };
+    }
+  },
+
+  // --- Secure Razorpay Payments & Entitlements ---
+  createPaymentOrder({ orderId, userId, userEmail, plan, planId, amount, currency = 'INR' }) {
+    const selectedPlan = plan || planId || 'premium';
+    const now = new Date().toISOString();
+    const id = `pay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const record = {
+      id,
+      order_id: orderId,
+      payment_id: null,
+      signature: null,
+      user_id: userId,
+      user_email: userEmail || null,
+      plan: selectedPlan,
+      amount,
+      currency,
+      status: 'created',
+      created_at: now,
+      paid_at: null,
+    };
+
+    if (sqliteDb) {
+      sqliteDb.prepare(`
+        INSERT INTO payments (id, order_id, user_id, user_email, plan, amount, currency, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(record.id, record.order_id, record.user_id, record.user_email, record.plan, record.amount, record.currency, record.status, record.created_at);
+    } else {
+      if (!jsonStore.payments) jsonStore.payments = [];
+      jsonStore.payments.push(record);
+      persistJsonStore();
+    }
+    return record;
+  },
+
+  getPaymentOrderByOrderId(orderId) {
+    if (!orderId) return null;
+    if (sqliteDb) {
+      return sqliteDb.prepare('SELECT * FROM payments WHERE order_id = ?').get(orderId) || null;
+    } else {
+      if (!jsonStore.payments) jsonStore.payments = [];
+      return jsonStore.payments.find((p) => p.order_id === orderId) || null;
+    }
+  },
+
+  markPaymentSuccess({ orderId, paymentId, signature }) {
+    const now = new Date().toISOString();
+    if (sqliteDb) {
+      sqliteDb.prepare(`
+        UPDATE payments
+        SET status = 'paid', payment_id = ?, signature = ?, paid_at = ?
+        WHERE order_id = ?
+      `).run(paymentId, signature, now, orderId);
+      return this.getPaymentOrderByOrderId(orderId);
+    } else {
+      if (!jsonStore.payments) jsonStore.payments = [];
+      const payment = jsonStore.payments.find((p) => p.order_id === orderId);
+      if (payment) {
+        payment.status = 'paid';
+        payment.payment_id = paymentId;
+        payment.signature = signature;
+        payment.paid_at = now;
+        persistJsonStore();
+      }
+      return payment || null;
+    }
+  },
+
+  grantPremiumEntitlement({ userId, plan = 'pro', amountPaid = 0, currency = 'INR' }) {
+    const now = new Date().toISOString();
+    if (sqliteDb) {
+      sqliteDb.prepare(`
+        INSERT INTO premium_entitlements (user_id, plan, status, activated_at, amount_paid, currency, payment_verified)
+        VALUES (?, ?, 'active', ?, ?, ?, 1)
+        ON CONFLICT(user_id) DO UPDATE SET
+          plan = excluded.plan,
+          status = 'active',
+          activated_at = excluded.activated_at,
+          amount_paid = premium_entitlements.amount_paid + excluded.amount_paid,
+          currency = excluded.currency,
+          payment_verified = 1
+      `).run(userId, plan, now, amountPaid, currency);
+      return this.getPremiumEntitlement(userId);
+    } else {
+      if (!jsonStore.premium_entitlements) jsonStore.premium_entitlements = [];
+      let ent = jsonStore.premium_entitlements.find((e) => e.user_id === userId);
+      if (ent) {
+        ent.plan = plan;
+        ent.status = 'active';
+        ent.activated_at = now;
+        ent.amount_paid = (ent.amount_paid || 0) + amountPaid;
+        ent.currency = currency;
+        ent.payment_verified = 1;
+      } else {
+        ent = {
+          user_id: userId,
+          plan,
+          status: 'active',
+          activated_at: now,
+          expires_at: null,
+          amount_paid: amountPaid,
+          currency,
+          payment_verified: 1,
+        };
+        jsonStore.premium_entitlements.push(ent);
+      }
+      persistJsonStore();
+      return ent;
+    }
+  },
+
+  getPremiumEntitlement(userId) {
+    if (!userId) return null;
+    if (sqliteDb) {
+      return sqliteDb.prepare('SELECT * FROM premium_entitlements WHERE user_id = ?').get(userId) || null;
+    } else {
+      if (!jsonStore.premium_entitlements) jsonStore.premium_entitlements = [];
+      return jsonStore.premium_entitlements.find((e) => e.user_id === userId) || null;
     }
   },
 
