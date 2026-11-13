@@ -4,6 +4,8 @@
 // Each processor returns a ProcessorResult.
 // ============================================================
 
+import type { PDFDocument } from 'pdf-lib';
+
 export interface ProcessorResult {
   blob: Blob;
   filename: string;
@@ -12,12 +14,15 @@ export interface ProcessorResult {
 }
 
 export class ProcessorError extends Error {
+  code: string;
+
   constructor(
     message: string,
-    public code: string = 'PROCESSING_ERROR'
+    code: string = 'PROCESSING_ERROR'
   ) {
     super(message);
     this.name = 'ProcessorError';
+    this.code = code;
   }
 }
 
@@ -313,7 +318,52 @@ export async function rotatePdf(
   };
 }
 
-/** Add a text watermark / re-save to strip unused objects for compression */
+/** Compress PDF document using Object Stream consolidation and metadata cleanup */
+export async function compressPdf(
+  file: File,
+  options: { level?: 'low' | 'medium' | 'high' } = {}
+): Promise<ProcessorResult> {
+  const { PDFDocument, PDFName } = await import('pdf-lib');
+  const arrayBuffer = await file.arrayBuffer();
+  let pdfDoc: PDFDocument;
+  try {
+    pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+  } catch (err) {
+    throw new ProcessorError(`Could not read PDF document: ${(err as Error)?.message}`, 'INVALID_PDF');
+  }
+
+  const level = options.level || 'medium';
+  if (level === 'high' || level === 'medium') {
+    const catalog = pdfDoc.catalog;
+    if (catalog.has(PDFName.of('Metadata'))) {
+      catalog.delete(PDFName.of('Metadata'));
+    }
+  }
+
+  const pdfBytes = await pdfDoc.save({
+    useObjectStreams: true,
+    objectsPerTick: 50,
+  });
+
+  const blob = new Blob([toBlobPart(pdfBytes)], { type: 'application/pdf' });
+  const baseName = file.name.replace(/\.pdf$/i, '');
+  const savedBytes = Math.max(0, file.size - blob.size);
+
+  return {
+    blob,
+    filename: `${baseName}_compressed.pdf`,
+    mimeType: 'application/pdf',
+    meta: {
+      originalSize: file.size,
+      outputSize: blob.size,
+      savedBytes,
+      compressionLevel: level,
+      pages: pdfDoc.getPageCount(),
+    },
+  };
+}
+
+/** Add a text watermark / re-save */
 export async function watermarkPdf(
   file: File,
   text: string,
@@ -340,7 +390,7 @@ export async function watermarkPdf(
     }
   }
 
-  const pdfBytes = await pdfDoc.save();
+  const pdfBytes = await pdfDoc.save({ useObjectStreams: true });
   const blob = new Blob([toBlobPart(pdfBytes)], { type: 'application/pdf' });
   const baseName = file.name.replace(/\.pdf$/i, '');
 
@@ -352,34 +402,100 @@ export async function watermarkPdf(
   };
 }
 
-/** Extract text from PDF (embedded text) */
+/** Extract text from PDF (embedded text, hex strings, and page streams) */
 export async function extractTextFromPdf(file: File): Promise<ProcessorResult> {
+  const { PDFDocument } = await import('pdf-lib');
   const arrayBuffer = await file.arrayBuffer();
-  const decoder = new TextDecoder('utf-8', { fatal: false });
-  const raw = decoder.decode(arrayBuffer);
+  const extractedChunks: string[] = [];
 
-  const texts: string[] = [];
-  const btEtRegex = /BT([\s\S]*?)ET/g;
-  let match;
-  while ((match = btEtRegex.exec(raw)) !== null) {
-    const inner = match[1];
-    const strRegex = /\((.*?)\)/g;
-    let strMatch;
-    while ((strMatch = strRegex.exec(inner)) !== null) {
-      const s = strMatch[1].replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
-      if (s.trim()) texts.push(s);
+  let pageCount = 0;
+  try {
+    const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+    pageCount = pdfDoc.getPageCount();
+
+    for (let pIdx = 0; pIdx < pageCount; pIdx++) {
+      const page = pdfDoc.getPage(pIdx);
+      const contents = page.node.Contents();
+      if (!contents) continue;
+
+      const streamList = (contents as any).asArray ? (contents as any).asArray() : [contents];
+      for (const s of streamList) {
+        const streamObj = pdfDoc.context.lookup(s) as { getContents?: () => Uint8Array };
+        if (streamObj && typeof streamObj.getContents === 'function') {
+          const rawStreamBytes = streamObj.getContents();
+          const str = new TextDecoder('latin1').decode(rawStreamBytes);
+
+          // Extract literal string text in parentheses: (Hello World) Tj
+          const tjMatches = str.matchAll(/\(([^)]+)\)\s*(?:Tj|'|")/g);
+          for (const match of tjMatches) {
+            const clean = match[1].replace(/\\([0-7]{1,3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)))
+              .replace(/\\n/g, '\n')
+              .replace(/\\r/g, '\r')
+              .replace(/\\t/g, '\t')
+              .replace(/\\/g, '');
+            if (clean.trim()) extractedChunks.push(clean);
+          }
+
+          // Extract array text: [(Hello) 20 (World)] TJ
+          const arrayMatches = str.matchAll(/\[(.*?)\]\s*TJ/gs);
+          for (const m of arrayMatches) {
+            const inner = m[1];
+            const innerParenMatches = inner.matchAll(/\(([^)]*)\)/g);
+            const words: string[] = [];
+            for (const ipm of innerParenMatches) {
+              if (ipm[1].trim()) words.push(ipm[1]);
+            }
+            if (words.length > 0) extractedChunks.push(words.join(' '));
+          }
+
+          // Extract hex encoded strings: <48656c6c6f> Tj
+          const hexMatches = str.matchAll(/<([0-9a-fA-F]+)>\s*(?:Tj|'|")/g);
+          for (const hm of hexMatches) {
+            const hex = hm[1];
+            let decodedHex = '';
+            for (let c = 0; c < hex.length; c += 2) {
+              const code = parseInt(hex.substr(c, 2), 16);
+              if (code >= 32 && code <= 126) decodedHex += String.fromCharCode(code);
+            }
+            if (decodedHex.trim()) extractedChunks.push(decodedHex);
+          }
+        }
+      }
+    }
+  } catch {
+    // Fallback to basic regex over entire arrayBuffer
+  }
+
+  if (extractedChunks.length === 0) {
+    const raw = new TextDecoder('latin1').decode(new Uint8Array(arrayBuffer));
+    const btEtRegex = /BT([\s\S]*?)ET/g;
+    let match;
+    while ((match = btEtRegex.exec(raw)) !== null) {
+      const inner = match[1];
+      const strRegex = /\((.*?)\)/g;
+      let strMatch;
+      while ((strMatch = strRegex.exec(inner)) !== null) {
+        const s = strMatch[1].replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
+        if (s.trim()) extractedChunks.push(s);
+      }
     }
   }
 
-  const text = texts.join(' ') || '(No extractable text found — file may be a scanned PDF)';
-  const blob = new Blob([text], { type: 'text/plain' });
+  const text = extractedChunks.join(' ').replace(/\s+/g, ' ').trim() ||
+    '(No extractable text found — file may be a scanned or image-only PDF)';
+
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
   const baseName = file.name.replace(/\.pdf$/i, '');
 
   return {
     blob,
     filename: `${baseName}_text.txt`,
     mimeType: 'text/plain',
-    meta: { characters: text.length, words: text.split(/\s+/).length },
+    meta: {
+      characters: text.length,
+      words: text.split(/\s+/).filter(Boolean).length,
+      pages: pageCount,
+    },
   };
 }
 

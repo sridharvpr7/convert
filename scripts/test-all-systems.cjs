@@ -47,30 +47,46 @@ async function runTests() {
   console.log('\n--- 1. Tool Registry & Categories ---');
   const toolsModule = await import('../src/registry/tools.ts');
   const { TOOLS, CATEGORY_META } = toolsModule;
+  const dispatchModule = await import('../src/lib/toolDispatch.ts');
+  const { hasProcessor } = dispatchModule;
 
-  test('Tool registry contains exactly 17 tools', () => {
-    assert.strictEqual(TOOLS.length, 17, `Expected 17 tools, found ${TOOLS.length}`);
+  test('Tool registry contains exactly 31 tools', () => {
+    assert.strictEqual(TOOLS.length, 31, `Expected 31 tools, found ${TOOLS.length}`);
   });
 
-  test('Categories count is exactly 5', () => {
+  test('Categories count is exactly 7', () => {
     const cats = Object.keys(CATEGORY_META);
-    assert.strictEqual(cats.length, 5, `Expected 5 categories, found ${cats.length}`);
-    const expected = ['pdf', 'image', 'data', 'utilities', 'archive'];
+    assert.strictEqual(cats.length, 7, `Expected 7 categories, found ${cats.length}`);
+    const expected = ['pdf', 'image', 'data', 'developer', 'security', 'utilities', 'archive'];
     assert.deepStrictEqual(cats.sort(), expected.sort());
   });
 
-  const expected17 = [
+  const expected31 = [
+    // 17 Core Tools
     'merge-pdf', 'split-pdf', 'compress-pdf', 'rotate-pdf', 'jpg-to-pdf', 'pdf-to-text',
     'image-converter', 'image-compressor', 'image-resize', 'image-crop',
     'csv-to-excel', 'excel-to-csv', 'json-to-csv', 'csv-to-json',
     'qr-generator',
     'zip-compressor', 'zip-extractor',
+    // 9 Developer Studio Tools
+    'json-formatter', 'sql-formatter', 'diff-checker', 'hash-generator',
+    'base64-encoder-decoder', 'url-encoder-decoder', 'uuid-generator',
+    'regex-tester', 'jwt-decoder',
+    // 5 PDF Security Studio Tools
+    'pdf-password-protect', 'pdf-unlock', 'pdf-redact',
+    'pdf-metadata-cleaner', 'pdf-security-inspector',
   ];
 
-  test('All 17 required tools are present', () => {
+  test('All 31 required tools are present in registry', () => {
     const slugs = TOOLS.map((t) => t.slug);
-    for (const exp of expected17) {
+    for (const exp of expected31) {
       assert(slugs.includes(exp), `Missing tool slug: ${exp}`);
+    }
+  });
+
+  test('All 31 tools have implemented dispatch processors', () => {
+    for (const exp of expected31) {
+      assert(hasProcessor(exp), `Missing processor dispatch for: ${exp}`);
     }
   });
 
@@ -831,6 +847,137 @@ async function runTests() {
     const ent = db.getPremiumEntitlement('usr_webhook_test');
     assert(ent, 'Webhook should grant entitlement');
     assert.strictEqual(ent.status, 'active');
+  });
+
+  // ── 8. Developer Studio & Data Tools Unit Verification ───
+  console.log('\n--- 8. Developer Studio & Data Tools Verification ---');
+  const dataTools = await import('../src/lib/dataTools.ts');
+  const devTools = await import('../src/lib/developerTools.ts');
+
+  await testAsync('Data: CSV to JSON handles multiline quotes and duplicate headers', async () => {
+    const csvContent = 'Name,Role,Name\n"Alice, Engineer","Senior\nDev","Alice Dup"\nBob,Designer,Bob2';
+    const mockFile = new File([csvContent], 'test.csv', { type: 'text/csv' });
+    const res = await dataTools.csvToJson(mockFile, { hasHeaders: true, indent: '2' });
+    const text = await res.blob.text();
+    const parsed = JSON.parse(text);
+    assert.strictEqual(parsed.length, 2, 'Should have 2 data records');
+    assert.strictEqual(parsed[0]['Name'], 'Alice, Engineer', 'Quoted comma must be preserved');
+    assert.strictEqual(parsed[0]['Role'], 'Senior\nDev', 'Multiline quoted value must be preserved');
+    assert('Name_2' in parsed[0], 'Duplicate header Name must be disambiguated as Name_2');
+  });
+
+  await testAsync('Data: CSV to Excel preserves leading zeros in codes and IDs', async () => {
+    const csvContent = 'ID,Code,Zip\n007,01234,00501';
+    const mockFile = new File([csvContent], 'codes.csv', { type: 'text/csv' });
+    const res = await dataTools.csvToExcel(mockFile, { preserveLeadingZeros: true });
+    assert(res.blob.size > 0, 'Excel file must be generated');
+    assert.strictEqual(res.meta?.rows, 2);
+    assert.strictEqual(res.meta?.columns, 3);
+  });
+
+  await testAsync('Data: JSON to CSV collects union of non-uniform keys and flattens objects', async () => {
+    const jsonData = [
+      { id: 1, name: 'Alice', profile: { dept: 'Core', level: 5 } },
+      { id: 2, name: 'Bob', email: 'bob@example.com' },
+    ];
+    const mockFile = new File([JSON.stringify(jsonData)], 'data.json', { type: 'application/json' });
+    const res = await dataTools.jsonToCsv(mockFile, { flatten: true });
+    const csvText = await res.blob.text();
+    assert(csvText.includes('id'), 'Must have id column');
+    assert(csvText.includes('profile.dept'), 'Must have flattened profile.dept column');
+    assert(csvText.includes('email'), 'Must have email column from 2nd record');
+    assert.strictEqual(res.meta?.records, 2);
+    assert.strictEqual(res.meta?.columns, 5);
+  });
+
+  await testAsync('Dev: JSON Formatter parses, formats, and minifies', async () => {
+    const raw = '{"b":2,"a":1}';
+    const mockFile = new File([raw], 'test.json', { type: 'application/json' });
+    const prettyRes = await devTools.jsonFormat(mockFile, { mode: 'pretty2' });
+    const prettyText = await prettyRes.blob.text();
+    assert(prettyText.includes('\n  "b": 2'), 'Must be formatted with 2 spaces');
+
+    const compactRes = await devTools.jsonFormat(mockFile, { mode: 'compact' });
+    const compactText = await compactRes.blob.text();
+    assert(!compactText.includes('\n'), 'Minified JSON must not have newlines');
+  });
+
+  await testAsync('Dev: SQL Formatter formats SELECT query with UPPERCASE keywords', async () => {
+    const query = 'select id, name from users where status = 1 order by id desc';
+    const mockFile = new File([query], 'query.sql', { type: 'text/plain' });
+    const res = await devTools.sqlFormat(mockFile, { keywordCase: 'upper', indent: '2' });
+    const sqlText = await res.blob.text();
+    assert(sqlText.includes('SELECT'), 'Keywords must be uppercase');
+    assert(sqlText.includes('FROM'), 'FROM must be uppercase');
+    assert(sqlText.includes('WHERE'), 'WHERE must be uppercase');
+  });
+
+  await testAsync('Dev: Diff Checker computes Myers LCS additions & deletions', async () => {
+    const diffInput = '===ORIGINAL===\nline1\nline2\n===MODIFIED===\nline1\nline2 modified\nline3';
+    const mockFile = new File([diffInput], 'diff.txt', { type: 'text/plain' });
+    const res = await devTools.diffCheck(mockFile);
+    const diffText = await res.blob.text();
+    assert(diffText.includes('--- Original'), 'Diff must have header');
+    assert(diffText.includes('- line2'), 'Must detect deletion');
+    assert(diffText.includes('+ line2 modified'), 'Must detect addition');
+    assert.strictEqual(res.meta?.additions, 2);
+    assert.strictEqual(res.meta?.deletions, 1);
+  });
+
+  await testAsync('Dev: Hash Generator produces MD5, SHA-1, SHA-256, and SHA-512', async () => {
+    const mockFile = new File(['hello world'], 'hash.txt', { type: 'text/plain' });
+    const res = await devTools.hashGenerate(mockFile);
+    const text = await res.blob.text();
+    assert.strictEqual(res.meta?.md5, '5eb63bbbe01eeed093cb22bb8f5acdc3', 'MD5 of "hello world" must match');
+    assert.strictEqual(res.meta?.sha256, 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9', 'SHA-256 must match');
+    assert(text.includes('5eb63bbbe01eeed093cb22bb8f5acdc3'), 'Text report must include MD5 hash');
+    assert(text.includes('Notice: MD5 is cryptographically broken'), 'Must warn about MD5/SHA-1 weaknesses');
+  });
+
+  await testAsync('Dev: Base64 Codec supports UTF-8 Unicode, Tamil text & URL-safe mode', async () => {
+    const unicodeStr = 'CONVET PULSE — தமிழ் வாழ்க 🚀';
+    const encFile = new File([unicodeStr], 'encode.txt', { type: 'text/plain' });
+    const encRes = await devTools.base64Codec(encFile, { mode: 'encode' });
+    const b64 = await encRes.blob.text();
+
+    const decFile = new File([b64], 'decode.txt', { type: 'text/plain' });
+    const decRes = await devTools.base64Codec(decFile, { mode: 'decode' });
+    const decoded = await decRes.blob.text();
+    assert.strictEqual(decoded, unicodeStr, 'Decoded Unicode must match original perfectly');
+  });
+
+  await testAsync('Dev: UUID Generator generates valid RFC 4122 v4 UUIDs', async () => {
+    const mockFile = new File([''], 'generate.txt', { type: 'text/plain' });
+    const res = await devTools.uuidGenerate(mockFile, { count: '5', format: 'standard' });
+    const text = await res.blob.text();
+    const lines = text.trim().split('\n');
+    assert.strictEqual(lines.length, 5, 'Should generate 5 UUIDs');
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    for (const uuid of lines) {
+      assert(uuidRegex.test(uuid), `Generated UUID ${uuid} must conform to RFC 4122 v4`);
+    }
+  });
+
+  await testAsync('Dev: Regex Tester evaluates pattern and extracts matches and groups', async () => {
+    const input = '===PATTERN===\n([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\\.[A-Za-z]{2,})\n===TEST_STRING===\nContact us at dev@convetpulse.com or admin@test.org for info.';
+    const mockFile = new File([input], 'regex.txt', { type: 'text/plain' });
+    const res = await devTools.regexTest(mockFile);
+    const text = await res.blob.text();
+    assert(text.includes('Total Matches Found: 2'), 'Must find 2 email matches');
+    assert(text.includes('Group 1: dev') || text.includes('dev'), 'Must capture user group');
+    assert(text.includes('convetpulse.com'), 'Must capture domain group');
+    assert.strictEqual(res.meta?.matchCount, 2);
+  });
+
+  await testAsync('Dev: JWT Decoder inspects header and payload with security warning', async () => {
+    // Valid JWT structure: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFsaWNlIiwiaWF0IjoxNTE2MjM5MDIyfQ.fake_signature
+    const token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFsaWNlIiwiaWF0IjoxNTE2MjM5MDIyfQ.fake_signature';
+    const mockFile = new File([token], 'token.jwt', { type: 'text/plain' });
+    const res = await devTools.jwtDecode(mockFile);
+    const text = await res.blob.text();
+    assert(text.includes('"alg": "HS256"'), 'Must parse algorithm');
+    assert(text.includes('"name": "Alice"'), 'Must parse payload claims');
+    assert(text.includes('CRYPTOGRAPHIC SIGNATURE IS NOT VERIFIED'), 'Must display bold signature warning');
   });
 
   // Summary

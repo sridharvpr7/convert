@@ -82,9 +82,9 @@ const dispatchMap: Record<string, ToolDispatch> = {
   },
 
   'compress-pdf': {
-    processor: async (files, _opts) => {
-      const { watermarkPdf } = await import('./processors');
-      return watermarkPdf(files[0], '', { opacity: 0 });
+    processor: async (files, opts) => {
+      const { compressPdf } = await import('./processors');
+      return compressPdf(files[0], opts as { level?: 'low' | 'medium' | 'high' });
     },
     optionFields: [
       {
@@ -92,14 +92,14 @@ const dispatchMap: Record<string, ToolDispatch> = {
         key: 'level',
         label: 'Compression Level',
         options: [
-          { label: 'Low (better quality)', value: 'low' },
-          { label: 'Medium (balanced)', value: 'medium' },
-          { label: 'High (smaller file)', value: 'high' },
+          { label: 'Medium (Balanced Object Streams)', value: 'medium' },
+          { label: 'High (Maximum Compression)', value: 'high' },
+          { label: 'Low (Quality First)', value: 'low' },
         ],
         default: 'medium',
       },
     ],
-    optionsHint: 'Browser-side compression re-saves the PDF and strips unused objects.',
+    optionsHint: 'Browser-side compression consolidates object streams and strips redundant metadata.',
   },
 
   'rotate-pdf': {
@@ -228,25 +228,248 @@ const dispatchMap: Record<string, ToolDispatch> = {
 
   // ── DATA ─────────────────────────────────────────────
   'csv-to-excel': {
-    processor: async (files) => (await import('./dataTools')).csvToExcel(files[0]),
+    processor: async (files, opts) => (await import('./dataTools')).csvToExcel(files[0], opts),
+    optionFields: [
+      { type: 'checkbox', key: 'preserveLeadingZeros', label: 'Preserve leading zeros in IDs & codes', default: true },
+      { type: 'text', key: 'sheetName', label: 'Worksheet Name', placeholder: 'Sheet1', default: 'Sheet1' },
+    ],
+    optionsHint: 'Converts CSV into Excel XLSX with RFC 4180 compliance and leading zeros preserved.',
   },
 
   'excel-to-csv': {
-    processor: async (files) => (await import('./dataTools')).excelToCsv(files[0]),
+    processor: async (files, opts) => (await import('./dataTools')).excelToCsv(files[0], opts),
+    optionFields: [
+      { type: 'text', key: 'sheetName', label: 'Sheet Name (optional)', placeholder: 'Leave blank for active sheet', default: '' },
+    ],
+    optionsHint: 'Converts Excel workbook to CSV formatted with UTF-8 BOM for international characters.',
   },
 
   'json-to-csv': {
-    processor: async (files) => {
-      const { jsonToCsv } = await import('./processors');
-      return jsonToCsv(files[0]);
-    },
+    processor: async (files, opts) => (await import('./dataTools')).jsonToCsv(files[0], opts),
+    textPlaceholder: 'Paste JSON data here (e.g. [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}])…',
+    optionFields: [
+      { type: 'checkbox', key: 'flatten', label: 'Flatten nested objects (user.name)', default: true },
+    ],
+    optionsHint: 'Converts JSON array into CSV collecting union of all fields without data loss.',
   },
 
   'csv-to-json': {
-    processor: async (files) => {
-      const { csvToJson } = await import('./processors');
-      return csvToJson(files[0]);
-    },
+    processor: async (files, opts) => (await import('./dataTools')).csvToJson(files[0], opts),
+    textPlaceholder: 'Paste CSV text here (e.g. id,name,department\n001,Alice,Engineering)…',
+    optionFields: [
+      { type: 'checkbox', key: 'hasHeaders', label: 'First row contains column headers', default: true },
+      { type: 'checkbox', key: 'parseValues', label: 'Parse numeric and boolean values', default: false },
+      {
+        type: 'select',
+        key: 'indent',
+        label: 'JSON Formatting',
+        options: [
+          { label: '2 Spaces (Readable)', value: '2' },
+          { label: '4 Spaces', value: '4' },
+          { label: 'Minified (Compact)', value: 'compact' },
+        ],
+        default: '2',
+      },
+    ],
+    optionsHint: 'Converts CSV to JSON with duplicate header protection and multiline quote support.',
+  },
+
+  // ── DEVELOPER STUDIO ──────────────────────────────────
+  'json-formatter': {
+    processor: async (files, opts) => (await import('./developerTools')).jsonFormat(files[0], opts),
+    textPlaceholder: 'Paste raw JSON text here or upload a .json file…',
+    optionFields: [
+      {
+        type: 'select',
+        key: 'mode',
+        label: 'Formatting Style',
+        options: [
+          { label: '2 Spaces (Standard)', value: 'pretty2' },
+          { label: '4 Spaces', value: 'pretty4' },
+          { label: 'Tabs', value: 'tabs' },
+          { label: 'Minified (Single Line)', value: 'compact' },
+        ],
+        default: 'pretty2',
+      },
+    ],
+    optionsHint: 'Validates JSON syntax and provides exact line/column error diagnostics.',
+  },
+
+  'sql-formatter': {
+    processor: async (files, opts) => (await import('./developerTools')).sqlFormat(files[0], opts),
+    textPlaceholder: 'Paste your SQL query here (SELECT u.id, u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id WHERE u.status = 1 GROUP BY u.id ORDER BY o.total DESC)…',
+    optionFields: [
+      {
+        type: 'select',
+        key: 'keywordCase',
+        label: 'Keyword Case',
+        options: [
+          { label: 'UPPERCASE (SELECT, FROM, WHERE)', value: 'upper' },
+          { label: 'lowercase (select, from, where)', value: 'lower' },
+          { label: 'Preserve Original', value: 'preserve' },
+        ],
+        default: 'upper',
+      },
+      {
+        type: 'select',
+        key: 'indent',
+        label: 'Indentation',
+        options: [
+          { label: '2 Spaces', value: '2' },
+          { label: '4 Spaces', value: '4' },
+        ],
+        default: '2',
+      },
+    ],
+    optionsHint: 'Formats complex SQL queries into clean, readable lines while preserving literals.',
+  },
+
+  'diff-checker': {
+    processor: async (files, opts) => (await import('./developerTools')).diffCheck(files[0], opts),
+    textPlaceholder: '===ORIGINAL===\nconst x = 10;\nfunction greet() {\n  console.log("Hello");\n}\n===MODIFIED===\nconst x = 20;\nfunction greet(name) {\n  console.log("Hello, " + name);\n}',
+    optionsHint: 'Compares two text or code snippets using Myers LCS algorithm with additions/deletions.',
+  },
+
+  'hash-generator': {
+    processor: async (files, opts) => (await import('./developerTools')).hashGenerate(files[0], opts),
+    textPlaceholder: 'Enter any text to generate MD5, SHA-1, SHA-256, and SHA-512 hashes…',
+    optionsHint: 'Computes cryptographic hashes. MD5 and SHA-1 carry explicit vulnerability warnings.',
+  },
+
+  'base64-encoder-decoder': {
+    processor: async (files, opts) => (await import('./developerTools')).base64Codec(files[0], opts),
+    textPlaceholder: 'Enter text to encode into Base64, or paste Base64 to decode…',
+    optionFields: [
+      {
+        type: 'select',
+        key: 'mode',
+        label: 'Action Mode',
+        options: [
+          { label: 'Encode to Base64', value: 'encode' },
+          { label: 'Decode from Base64', value: 'decode' },
+        ],
+        default: 'encode',
+      },
+      { type: 'checkbox', key: 'urlSafe', label: 'URL-Safe encoding (RFC 4648 §5: - and _)', default: false },
+    ],
+    optionsHint: 'Full Unicode & UTF-8 support with strict decoding error diagnostics.',
+  },
+
+  'url-encoder-decoder': {
+    processor: async (files, opts) => (await import('./developerTools')).urlCodec(files[0], opts),
+    textPlaceholder: 'Enter URL or text query to encode or decode (e.g. https://example.com/search?q=hello world & format=json)…',
+    optionFields: [
+      {
+        type: 'select',
+        key: 'mode',
+        label: 'Action Mode',
+        options: [
+          { label: 'Encode URL', value: 'encode' },
+          { label: 'Decode URL', value: 'decode' },
+        ],
+        default: 'encode',
+      },
+      { type: 'checkbox', key: 'component', label: 'Component mode (encodeURIComponent)', default: true },
+    ],
+    optionsHint: 'Encodes and decodes URL percent sequences with UTF-8 support and error checks.',
+  },
+
+  'uuid-generator': {
+    processor: async (files, opts) => (await import('./developerTools')).uuidGenerate(files[0], opts),
+    textPlaceholder: 'Click process to generate cryptographically secure UUID v4 identifiers…',
+    optionFields: [
+      {
+        type: 'select',
+        key: 'count',
+        label: 'Number of UUIDs',
+        options: [
+          { label: '1 UUID', value: '1' },
+          { label: '5 UUIDs', value: '5' },
+          { label: '10 UUIDs', value: '10' },
+          { label: '25 UUIDs', value: '25' },
+          { label: '50 UUIDs', value: '50' },
+          { label: '100 UUIDs', value: '100' },
+        ],
+        default: '5',
+      },
+      {
+        type: 'select',
+        key: 'format',
+        label: 'Format Style',
+        options: [
+          { label: 'Standard Lowercase (xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx)', value: 'standard' },
+          { label: 'Uppercase', value: 'uppercase' },
+          { label: 'No Hyphens (32-character hex)', value: 'no-hyphens' },
+          { label: 'Braces {GUID}', value: 'braces' },
+        ],
+        default: 'standard',
+      },
+    ],
+    optionsHint: 'Generates RFC 4122 v4 UUIDs using browser cryptographically secure random values.',
+  },
+
+  'regex-tester': {
+    processor: async (files, opts) => (await import('./developerTools')).regexTest(files[0], opts),
+    textPlaceholder: '===PATTERN===\n\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b\n===TEST_STRING===\nContact us at support@convetpulse.com or admin@company.org for assistance.',
+    optionFields: [
+      { type: 'text', key: 'pattern', label: 'Regex Pattern (without / slashes)', placeholder: '\\b\\w+@\\w+\\.\\w+\\b', default: '' },
+      {
+        type: 'select',
+        key: 'flags',
+        label: 'Flags',
+        options: [
+          { label: 'Global + Insensitive (gi)', value: 'gi' },
+          { label: 'Global + Multiline + Insensitive (gmi)', value: 'gmi' },
+          { label: 'Global (g)', value: 'g' },
+          { label: 'Case Insensitive (i)', value: 'i' },
+        ],
+        default: 'gi',
+      },
+    ],
+    optionsHint: 'Safely evaluates regular expressions against test text reporting all matches and groups.',
+  },
+
+  'jwt-decoder': {
+    processor: async (files, opts) => (await import('./developerTools')).jwtDecode(files[0], opts),
+    textPlaceholder: 'Paste JWT token string here (header.payload.signature)…',
+    optionsHint: 'Decodes header and payload claims locally. Cryptographic signature is NOT verified.',
+  },
+
+  // ── PDF SECURITY STUDIO ──────────────────────────────
+  'pdf-password-protect': {
+    processor: async (files, opts) => (await import('./pdfSecurityTools')).pdfPasswordProtect(files[0], opts),
+    optionFields: [
+      { type: 'password', key: 'password', label: 'Document Password', placeholder: 'Enter password to encrypt PDF', default: '' },
+      { type: 'password', key: 'ownerPassword', label: 'Owner Password (optional)', placeholder: 'Leave blank to use document password', default: '' },
+    ],
+    optionsHint: 'Applies genuine ISO 32000-1 128-bit encryption to password-protect the PDF.',
+  },
+
+  'pdf-unlock': {
+    processor: async (files, opts) => (await import('./pdfSecurityTools')).pdfUnlock(files[0], opts),
+    optionFields: [
+      { type: 'password', key: 'password', label: 'Current Password', placeholder: 'Enter current document password', default: '' },
+    ],
+    optionsHint: 'Removes password protection from encrypted PDFs when provided with valid authorization.',
+  },
+
+  'pdf-redact': {
+    processor: async (files, opts) => (await import('./pdfSecurityTools')).pdfRedact(files[0], opts),
+    optionFields: [
+      { type: 'text', key: 'searchTerm', label: 'Sensitive Phrase to Redact', placeholder: 'e.g. CONFIDENTIAL or SSN', default: 'CONFIDENTIAL' },
+      { type: 'checkbox', key: 'redactAllPages', label: 'Apply Redaction Band on All Pages', default: false },
+    ],
+    optionsHint: 'Permanently masks visual regions and strips sensitive text tokens from content streams.',
+  },
+
+  'pdf-metadata-cleaner': {
+    processor: async (files, opts) => (await import('./pdfSecurityTools')).pdfMetadataCleaner(files[0], opts),
+    optionsHint: 'Permanently strips author, title, creator, producer, creation dates, and XMP XML metadata.',
+  },
+
+  'pdf-security-inspector': {
+    processor: async (files, opts) => (await import('./pdfSecurityTools')).pdfSecurityInspector(files[0], opts),
+    optionsHint: 'Comprehensive security audit inspecting encryption, embedded JS, launch actions, signatures, and permissions.',
   },
 
   // ── UTILITIES ────────────────────────────────────────

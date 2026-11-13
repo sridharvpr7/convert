@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, ArrowRight, FileText, Image, Table, Archive, Wrench, Star, X,
+  Code2, ShieldCheck,
 } from 'lucide-react';
 import { searchTools, getPopularTools, Tool, CATEGORY_META, ToolCategory } from '@/registry/tools';
 import { useAppStore } from '@/store/app.store';
@@ -10,6 +11,8 @@ const CATEGORY_ICON_MAP: Record<ToolCategory, React.ReactNode> = {
   pdf: <FileText size={14} />,
   image: <Image size={14} />,
   data: <Table size={14} />,
+  developer: <Code2 size={14} />,
+  security: <ShieldCheck size={14} />,
   utilities: <Wrench size={14} />,
   archive: <Archive size={14} />,
 };
