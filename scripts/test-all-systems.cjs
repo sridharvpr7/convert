@@ -50,8 +50,8 @@ async function runTests() {
   const dispatchModule = await import('../src/lib/toolDispatch.ts');
   const { hasProcessor } = dispatchModule;
 
-  test('Tool registry contains exactly 31 tools', () => {
-    assert.strictEqual(TOOLS.length, 31, `Expected 31 tools, found ${TOOLS.length}`);
+  test('Tool registry contains exactly 42 tools', () => {
+    assert.strictEqual(TOOLS.length, 42, `Expected 42 tools, found ${TOOLS.length}`);
   });
 
   test('Categories count is exactly 7', () => {
@@ -61,12 +61,19 @@ async function runTests() {
     assert.deepStrictEqual(cats.sort(), expected.sort());
   });
 
-  const expected31 = [
-    // 17 Core Tools
+  const expected42 = [
+    // 6 Core PDF Tools
     'merge-pdf', 'split-pdf', 'compress-pdf', 'rotate-pdf', 'jpg-to-pdf', 'pdf-to-text',
+    // 10 Extended PDF Tools
+    'pdf-to-excel', 'pdf-to-powerpoint', 'word-to-pdf', 'excel-to-pdf', 'powerpoint-to-pdf',
+    'add-page-numbers', 'add-header-footer', 'crop-pdf', 'extract-pdf-images', 'repair-pdf',
+    // 4 Image Tools
     'image-converter', 'image-compressor', 'image-resize', 'image-crop',
+    // 4 Data & Spreadsheet Tools
     'csv-to-excel', 'excel-to-csv', 'json-to-csv', 'csv-to-json',
-    'qr-generator',
+    // 2 Utilities Tools
+    'qr-generator', 'barcode-generator',
+    // 2 Archive Tools
     'zip-compressor', 'zip-extractor',
     // 9 Developer Studio Tools
     'json-formatter', 'sql-formatter', 'diff-checker', 'hash-generator',
@@ -77,15 +84,15 @@ async function runTests() {
     'pdf-metadata-cleaner', 'pdf-security-inspector',
   ];
 
-  test('All 31 required tools are present in registry', () => {
+  test('All 42 required tools are present in registry', () => {
     const slugs = TOOLS.map((t) => t.slug);
-    for (const exp of expected31) {
+    for (const exp of expected42) {
       assert(slugs.includes(exp), `Missing tool slug: ${exp}`);
     }
   });
 
-  test('All 31 tools have implemented dispatch processors', () => {
-    for (const exp of expected31) {
+  test('All 42 tools have implemented dispatch processors', () => {
+    for (const exp of expected42) {
       assert(hasProcessor(exp), `Missing processor dispatch for: ${exp}`);
     }
   });
@@ -1097,6 +1104,131 @@ async function runTests() {
       if (err.code === 'DECRYPTION_ENGINE_UNAVAILABLE') threwSafetyError = true;
     }
     assert.strictEqual(threwSafetyError, true, 'Pseudo-decryption must be safely blocked');
+  });
+
+  // ── 10. Barcode Studio Verification ──────────────────────
+  console.log('\n--- 10. Barcode Studio Verification ---');
+  const barcodeTools = await import('../src/lib/barcodeTools.ts');
+
+  test('Barcode: EAN-13 check digit calculator computes valid modulo-10', () => {
+    // 978020137962 -> check digit should be 4 (resulting in ISBN 9780201379624)
+    const check = barcodeTools.calculateEan13Checksum('978020137962');
+    assert.strictEqual(check, 4, 'EAN-13 checksum for 978020137962 must be 4');
+  });
+
+  test('Barcode: UPC-A check digit calculator computes valid modulo-10', () => {
+    // 01234567890 -> check digit should be 5
+    const check = barcodeTools.calculateUpcAChecksum('01234567890');
+    assert.strictEqual(check, 5, 'UPC-A checksum for 01234567890 must be 5');
+  });
+
+  test('Barcode: EAN-8 check digit calculator computes valid modulo-10', () => {
+    // 9638507 -> check digit should be 4
+    const check = barcodeTools.calculateEan8Checksum('9638507');
+    assert.strictEqual(check, 4, 'EAN-8 checksum for 9638507 must be 4');
+  });
+
+  test('Barcode: Format validator catches mismatched check digits', () => {
+    const invalidEan = barcodeTools.validateBarcodeFormat('ean13', '9780201379629'); // wrong check digit (9 instead of 4)
+    assert.strictEqual(invalidEan.valid, false, 'Invalid check digit must be rejected');
+    assert(invalidEan.error?.includes('Expected 4'), 'Error must inform user of expected check digit');
+
+    const validEan = barcodeTools.validateBarcodeFormat('ean13', '9780201379624');
+    assert.strictEqual(validEan.valid, true, 'Valid check digit must be accepted');
+  });
+
+  test('Barcode: Generator encodes Code 128 binary modules and renders SVG', () => {
+    const { modules, normalizedText } = barcodeTools.generateBarcodeModules('code128', 'CONVET-100');
+    assert(modules.length > 50, 'Code 128 binary module pattern must be generated');
+    assert.strictEqual(normalizedText, 'CONVET-100');
+
+    const svg = barcodeTools.renderBarcodeSvg(modules, normalizedText, { width: 2, height: 70 });
+    assert(svg.includes('<svg'), 'Render output must be SVG');
+    assert(svg.includes('CONVET-100'), 'SVG must include human-readable text');
+    assert(svg.includes('<rect'), 'SVG must contain barcode bar rectangles');
+  });
+
+  // ── 11. Extended PDF Tools Verification ──────────────────
+  console.log('\n--- 11. Extended PDF Tools Verification ---');
+  const pdfExtTools = await import('../src/lib/pdfExtendedTools.ts');
+
+  await testAsync('PDF Ext: Add Page Numbers numbers pages with correct placement', async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([500, 700]);
+    doc.addPage([500, 700]);
+    const bytes = await doc.save();
+    const mockFile = new File([bytes], 'doc.pdf', { type: 'application/pdf' });
+
+    const res = await pdfExtTools.addPageNumbers(mockFile, {
+      position: 'bottom-center',
+      format: 'Page {n} of {total}',
+    });
+    const modifiedBytes = await res.blob.arrayBuffer();
+    const reloaded = await PDFDocument.load(modifiedBytes);
+    assert.strictEqual(reloaded.getPageCount(), 2);
+    assert.strictEqual(res.meta?.pagesNumbered, 2);
+  });
+
+  await testAsync('PDF Ext: Crop PDF validates crop area bounds', async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([200, 200]);
+    const bytes = await doc.save();
+    const mockFile = new File([bytes], 'small.pdf', { type: 'application/pdf' });
+
+    // Excessive margins leaving < 50pt should throw error
+    let threw = false;
+    try {
+      await pdfExtTools.cropPdf(mockFile, { top: 90, bottom: 90, left: 90, right: 90 });
+    } catch (err) {
+      if (err.code === 'INVALID_CROP_BOUNDS') threw = true;
+    }
+    assert.strictEqual(threw, true, 'Crop bounds that collapse printable area must be rejected');
+  });
+
+  await testAsync('PDF Ext: Repair Damaged PDF recovers from offset header', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([300, 300]);
+    page.drawText('Recovered Content', { x: 50, y: 150 });
+    const goodBytes = await doc.save();
+
+    // Corrupt file by prefixing junk bytes before %PDF
+    const junk = new TextEncoder().encode('JUNK_DATA_PADDING_BEFORE_PDF_START\n');
+    const corrupted = new Uint8Array(junk.length + goodBytes.length);
+    corrupted.set(junk, 0);
+    corrupted.set(goodBytes, junk.length);
+
+    const mockFile = new File([corrupted], 'corrupt.pdf', { type: 'application/pdf' });
+    const res = await pdfExtTools.repairPdf(mockFile);
+    assert(res.blob.size > 0, 'Repaired PDF blob must be produced');
+    const repairedBytes = await res.blob.arrayBuffer();
+    const reloaded = await PDFDocument.load(repairedBytes);
+    assert.strictEqual(reloaded.getPageCount(), 1, 'Repaired document must load successfully');
+  });
+
+  // ── 12. PDF Cryptographic Server Endpoints ───────────────
+  console.log('\n--- 12. PDF Cryptographic Server Endpoints ---');
+  await testAsync('Server: POST /api/pdf/encrypt returns 501 when QPDF binary is not installed', async () => {
+    const mock = mockRequest('POST', '/api/pdf/encrypt', { password: 'secretpassword123' });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/pdf/encrypt'));
+    const result = mock.getResult();
+    if (result.status === 501) {
+      assert.strictEqual(result.data.error, 'SYSTEM_BINARY_NOT_FOUND');
+      assert(result.data.message?.includes('QPDF'), 'Error message must explain QPDF requirement');
+    } else {
+      assert.strictEqual(result.status, 200);
+    }
+  });
+
+  await testAsync('Server: POST /api/pdf/decrypt returns 501 when QPDF binary is not installed', async () => {
+    const mock = mockRequest('POST', '/api/pdf/decrypt', { password: 'secretpassword123' });
+    await handleApiRoute(mock.req, mock.res, new URL('http://localhost/api/pdf/decrypt'));
+    const result = mock.getResult();
+    if (result.status === 501) {
+      assert.strictEqual(result.data.error, 'SYSTEM_BINARY_NOT_FOUND');
+      assert(result.data.message?.includes('QPDF'), 'Error message must explain QPDF requirement');
+    } else {
+      assert.strictEqual(result.status, 200);
+    }
   });
 
   // Summary

@@ -52,7 +52,7 @@ export interface ToolDispatch {
 // The dispatch map
 // ─────────────────────────────────────────────────────────
 const dispatchMap: Record<string, ToolDispatch> = {
-  // ── PDF ──────────────────────────────────────────────
+  // ── PDF CORE (6 tools) ────────────────────────────────
   'merge-pdf': {
     multiFile: true,
     processor: async (files) => {
@@ -90,11 +90,11 @@ const dispatchMap: Record<string, ToolDispatch> = {
       {
         type: 'select',
         key: 'level',
-        label: 'Compression Level',
+        label: 'Compression Preset',
         options: [
-          { label: 'Medium (Balanced Object Streams)', value: 'medium' },
-          { label: 'High (Maximum Compression)', value: 'high' },
-          { label: 'Low (Quality First)', value: 'low' },
+          { label: 'Balanced (Recommended - Crisp Text)', value: 'medium' },
+          { label: 'Smallest File (Maximum Compression)', value: 'high' },
+          { label: 'Best Quality (Minimal Size Reduction)', value: 'low' },
         ],
         default: 'medium',
       },
@@ -111,10 +111,10 @@ const dispatchMap: Record<string, ToolDispatch> = {
       {
         type: 'select',
         key: 'degrees',
-        label: 'Rotation',
+        label: 'Rotation Angle',
         options: [
           { label: '90° clockwise', value: '90' },
-          { label: '180°', value: '180' },
+          { label: '180° upside down', value: '180' },
           { label: '270° (90° counter-clockwise)', value: '270' },
         ],
         default: '90',
@@ -139,7 +139,125 @@ const dispatchMap: Record<string, ToolDispatch> = {
     optionsHint: 'Extracts embedded text from your PDF document.',
   },
 
-  // ── IMAGE ────────────────────────────────────────────
+  // ── PDF EXTENDED TOOLS (10 tools) ─────────────────────
+  'pdf-to-excel': {
+    processor: async (files, opts) => (await import('./pdfExtendedTools')).pdfToExcel(files[0], opts),
+    optionsHint: 'Extracts PDF tabular data streams and layout into an editable Excel spreadsheet (.xlsx).',
+  },
+
+  'pdf-to-powerpoint': {
+    processor: async (files, opts) => (await import('./pdfExtendedTools')).pdfToPowerPoint(files[0], opts),
+    optionsHint: 'Converts each PDF page into a 16:9 widescreen presentation slide in PowerPoint format (.pptx).',
+  },
+
+  'word-to-pdf': {
+    processor: async (files, opts) => (await import('./pdfExtendedTools')).wordToPdf(files[0], opts),
+    optionsHint: 'Converts Microsoft Word (.docx) documents into clean, portable PDF format.',
+  },
+
+  'excel-to-pdf': {
+    processor: async (files, opts) => (await import('./pdfExtendedTools')).excelToPdf(files[0], opts),
+    optionFields: [
+      {
+        type: 'select',
+        key: 'orientation',
+        label: 'Page Orientation',
+        options: [
+          { label: 'Landscape (Wide Tables)', value: 'landscape' },
+          { label: 'Portrait (Standard Vertical)', value: 'portrait' },
+        ],
+        default: 'landscape',
+      },
+    ],
+    optionsHint: 'Converts Microsoft Excel (.xlsx) spreadsheets into a formatted, printable PDF document.',
+  },
+
+  'powerpoint-to-pdf': {
+    processor: async (files, opts) => (await import('./pdfExtendedTools')).powerPointToPdf(files[0], opts),
+    optionsHint: 'Converts Microsoft PowerPoint (.pptx) presentation slides into a widescreen PDF presentation.',
+  },
+
+  'add-page-numbers': {
+    processor: async (files, opts) => (await import('./pdfExtendedTools')).addPageNumbers(files[0], opts),
+    optionFields: [
+      {
+        type: 'select',
+        key: 'position',
+        label: 'Position on Page',
+        options: [
+          { label: 'Bottom Center (Standard)', value: 'bottom-center' },
+          { label: 'Bottom Right', value: 'bottom-right' },
+          { label: 'Bottom Left', value: 'bottom-left' },
+          { label: 'Top Center', value: 'top-center' },
+          { label: 'Top Right', value: 'top-right' },
+          { label: 'Top Left', value: 'top-left' },
+        ],
+        default: 'bottom-center',
+      },
+      { type: 'text', key: 'format', label: 'Numbering Style', placeholder: 'Page {n} of {total}', default: 'Page {n} of {total}' },
+      { type: 'number', key: 'fontSize', label: 'Font Size (pt)', min: 6, max: 24, default: 10 },
+      { type: 'number', key: 'startNumber', label: 'Starting Number', min: 1, default: 1 },
+      { type: 'text', key: 'pageRange', label: 'Page Range (all, 1-5, 2-)', placeholder: 'all', default: 'all' },
+    ],
+    optionsHint: 'Appends clean, professional page numbering across selected pages of your PDF.',
+  },
+
+  'add-header-footer': {
+    processor: async (files, opts) => (await import('./pdfExtendedTools')).addHeaderFooter(files[0], opts),
+    optionFields: [
+      { type: 'text', key: 'headerText', label: 'Header Text (top of page)', placeholder: 'e.g. Confidential Report', default: '' },
+      {
+        type: 'select',
+        key: 'headerAlign',
+        label: 'Header Alignment',
+        options: [
+          { label: 'Center', value: 'center' },
+          { label: 'Left', value: 'left' },
+          { label: 'Right', value: 'right' },
+        ],
+        default: 'center',
+      },
+      { type: 'text', key: 'footerText', label: 'Footer Text (bottom of page)', placeholder: 'e.g. Page {page} of {total} · {date}', default: 'Page {page} of {total}' },
+      {
+        type: 'select',
+        key: 'footerAlign',
+        label: 'Footer Alignment',
+        options: [
+          { label: 'Center', value: 'center' },
+          { label: 'Left', value: 'left' },
+          { label: 'Right', value: 'right' },
+        ],
+        default: 'center',
+      },
+      { type: 'number', key: 'fontSize', label: 'Font Size (pt)', min: 6, max: 18, default: 9 },
+      { type: 'text', key: 'pageRange', label: 'Page Range', placeholder: 'all', default: 'all' },
+    ],
+    optionsHint: 'Adds custom header and footer text with support for {page}, {total}, and {date} variables.',
+  },
+
+  'crop-pdf': {
+    processor: async (files, opts) => (await import('./pdfExtendedTools')).cropPdf(files[0], opts),
+    optionFields: [
+      { type: 'number', key: 'top', label: 'Top Margin Trim (pt)', min: 0, max: 200, default: 20 },
+      { type: 'number', key: 'bottom', label: 'Bottom Margin Trim (pt)', min: 0, max: 200, default: 20 },
+      { type: 'number', key: 'left', label: 'Left Margin Trim (pt)', min: 0, max: 200, default: 20 },
+      { type: 'number', key: 'right', label: 'Right Margin Trim (pt)', min: 0, max: 200, default: 20 },
+      { type: 'text', key: 'pageRange', label: 'Page Range', placeholder: 'all', default: 'all' },
+    ],
+    optionsHint: 'Adjusts printable PDF CropBox margins on selected pages while preserving underlying vector streams.',
+  },
+
+  'extract-pdf-images': {
+    processor: async (files, opts) => (await import('./pdfExtendedTools')).extractPdfImages(files[0], opts),
+    optionsHint: 'Scans all PDF page resources and extracts embedded JPEG/PNG image objects into a ZIP file.',
+  },
+
+  'repair-pdf': {
+    processor: async (files, opts) => (await import('./pdfExtendedTools')).repairPdf(files[0], opts),
+    optionsHint: 'Inspects PDF syntax, resynchronizes broken header offsets, and reconstructs damaged xref tables.',
+  },
+
+  // ── IMAGE (4 tools) ──────────────────────────────────
   'image-converter': {
     processor: async (files, opts) => {
       const { imageConvert } = await import('./processors');
@@ -151,11 +269,11 @@ const dispatchMap: Record<string, ToolDispatch> = {
       {
         type: 'select',
         key: 'format',
-        label: 'Output Format',
+        label: 'Target Image Format',
         options: [
-          { label: 'WebP (recommended)', value: 'webp' },
-          { label: 'JPEG', value: 'jpeg' },
-          { label: 'PNG (lossless)', value: 'png' },
+          { label: 'WebP (Modern, Smallest Size)', value: 'webp' },
+          { label: 'JPEG (Best for Photos)', value: 'jpeg' },
+          { label: 'PNG (Lossless with Transparency)', value: 'png' },
         ],
         default: 'webp',
       },
@@ -166,236 +284,220 @@ const dispatchMap: Record<string, ToolDispatch> = {
   'image-compressor': {
     processor: async (files, opts) => {
       const { imageCompress } = await import('./processors');
-      const q = Number(opts.quality ?? 70) / 100;
+      const q = Number(opts.quality ?? 75) / 100;
       return imageCompress(files[0], q);
     },
     optionFields: [
-      { type: 'range', key: 'quality', label: 'Quality', min: 10, max: 100, step: 5, default: 70, unit: '%' },
+      { type: 'range', key: 'quality', label: 'Compression Quality', min: 10, max: 100, step: 5, default: 75, unit: '%' },
     ],
-    optionsHint: 'Lower quality = smaller file size.',
   },
 
   'image-resize': {
     processor: async (files, opts) => {
       const { imageResize } = await import('./processors');
-      return imageResize(files[0], {
-        width: opts.width ? Number(opts.width) : undefined,
-        height: opts.height ? Number(opts.height) : undefined,
-        maintainAspect: Boolean(opts.maintainAspect ?? true),
-        format: (opts.format as 'jpeg' | 'png' | 'webp') ?? 'jpeg',
-        quality: Number(opts.quality ?? 90) / 100,
-      });
+      const width = Number(opts.width ?? 800);
+      const height = Number(opts.height ?? 600);
+      return imageResize(files[0], { width, height, maintainAspect: true });
     },
     optionFields: [
-      { type: 'number', key: 'width', label: 'Width (px)', min: 1, max: 8000, default: 800 },
-      { type: 'number', key: 'height', label: 'Height (px)', min: 1, max: 8000, default: 600 },
-      { type: 'checkbox', key: 'maintainAspect', label: 'Maintain aspect ratio', default: true },
-      {
-        type: 'select',
-        key: 'format',
-        label: 'Output Format',
-        options: [
-          { label: 'JPEG', value: 'jpeg' },
-          { label: 'WebP', value: 'webp' },
-          { label: 'PNG', value: 'png' },
-        ],
-        default: 'jpeg',
-      },
-      { type: 'range', key: 'quality', label: 'Quality', min: 10, max: 100, step: 5, default: 90, unit: '%' },
+      { type: 'number', key: 'width', label: 'Width (px)', min: 10, max: 10000, default: 800 },
+      { type: 'number', key: 'height', label: 'Height (px)', min: 10, max: 10000, default: 600 },
     ],
   },
 
   'image-crop': {
     processor: async (files, opts) => {
       const { imageCropByRatio } = await import('./processors');
-      return imageCropByRatio(files[0], (opts.ratio as 'free' | '1:1' | '4:3' | '16:9') ?? '1:1');
+      const ratio = (opts.ratio as 'free' | '1:1' | '4:3' | '16:9') ?? '1:1';
+      return imageCropByRatio(files[0], ratio);
     },
     optionFields: [
       {
         type: 'select',
         key: 'ratio',
-        label: 'Crop ratio',
+        label: 'Aspect Ratio Crop',
         options: [
           { label: 'Square (1:1)', value: '1:1' },
-          { label: 'Landscape (4:3)', value: '4:3' },
-          { label: 'Wide (16:9)', value: '16:9' },
-          { label: 'Original', value: 'free' },
+          { label: 'Standard (4:3)', value: '4:3' },
+          { label: 'Widescreen (16:9)', value: '16:9' },
         ],
         default: '1:1',
       },
     ],
   },
 
-  // ── DATA ─────────────────────────────────────────────
+  // ── DATA & SPREADSHEETS (4 tools) ─────────────────────
   'csv-to-excel': {
     processor: async (files, opts) => (await import('./dataTools')).csvToExcel(files[0], opts),
     optionFields: [
-      { type: 'checkbox', key: 'preserveLeadingZeros', label: 'Preserve leading zeros in IDs & codes', default: true },
       { type: 'text', key: 'sheetName', label: 'Worksheet Name', placeholder: 'Sheet1', default: 'Sheet1' },
+      { type: 'checkbox', key: 'autoFilter', label: 'Add AutoFilter row on table headers', default: true },
     ],
-    optionsHint: 'Converts CSV into Excel XLSX with RFC 4180 compliance and leading zeros preserved.',
+    optionsHint: 'Converts CSV into formatted Excel spreadsheet (.xlsx) preserving numeric codes.',
   },
 
   'excel-to-csv': {
     processor: async (files, opts) => (await import('./dataTools')).excelToCsv(files[0], opts),
     optionFields: [
-      { type: 'text', key: 'sheetName', label: 'Sheet Name (optional)', placeholder: 'Leave blank for active sheet', default: '' },
+      { type: 'text', key: 'sheetName', label: 'Sheet Name (optional, defaults to first)', placeholder: 'Sheet1', default: '' },
+      {
+        type: 'select',
+        key: 'delimiter',
+        label: 'CSV Delimiter',
+        options: [
+          { label: 'Comma (,)', value: ',' },
+          { label: 'Semicolon (;)', value: ';' },
+          { label: 'Tab (\\t)', value: '\t' },
+        ],
+        default: ',',
+      },
     ],
-    optionsHint: 'Converts Excel workbook to CSV formatted with UTF-8 BOM for international characters.',
+    optionsHint: 'Exports Excel spreadsheets into RFC 4180 standard CSV format.',
   },
 
   'json-to-csv': {
     processor: async (files, opts) => (await import('./dataTools')).jsonToCsv(files[0], opts),
-    textPlaceholder: 'Paste JSON data here (e.g. [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}])…',
+    textPlaceholder: 'Paste JSON array of objects here, e.g. [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]',
     optionFields: [
-      { type: 'checkbox', key: 'flatten', label: 'Flatten nested objects (user.name)', default: true },
+      { type: 'checkbox', key: 'flatten', label: 'Flatten nested JSON objects with dot notation', default: true },
+      {
+        type: 'select',
+        key: 'delimiter',
+        label: 'CSV Delimiter',
+        options: [
+          { label: 'Comma (,)', value: ',' },
+          { label: 'Semicolon (;)', value: ';' },
+          { label: 'Tab (\\t)', value: '\t' },
+        ],
+        default: ',',
+      },
     ],
-    optionsHint: 'Converts JSON array into CSV collecting union of all fields without data loss.',
+    optionsHint: 'Converts JSON object arrays into CSV tabular format with key union detection.',
   },
 
   'csv-to-json': {
     processor: async (files, opts) => (await import('./dataTools')).csvToJson(files[0], opts),
-    textPlaceholder: 'Paste CSV text here (e.g. id,name,department\n001,Alice,Engineering)…',
+    textPlaceholder: 'Paste CSV text here, e.g.\nid,name,role\n1,Alice,Engineer\n2,Bob,Designer',
     optionFields: [
-      { type: 'checkbox', key: 'hasHeaders', label: 'First row contains column headers', default: true },
-      { type: 'checkbox', key: 'parseValues', label: 'Parse numeric and boolean values', default: false },
+      { type: 'checkbox', key: 'parseNumbers', label: 'Automatically parse numeric strings into numbers', default: true },
+      { type: 'checkbox', key: 'parseBooleans', label: 'Parse "true" and "false" into boolean values', default: true },
+      { type: 'checkbox', key: 'pretty', label: 'Pretty print JSON with 2-space indentation', default: true },
+    ],
+    optionsHint: 'Converts CSV tables into structured JSON arrays with RFC 4180 parsing.',
+  },
+
+  // ── DEVELOPER STUDIO (9 tools) ────────────────────────
+  'json-formatter': {
+    processor: async (files, opts) => (await import('./developerTools')).jsonFormat(files[0], opts),
+    textPlaceholder: '{\n  "name": "CONVET PULSE",\n  "tools": 42,\n  "offline": true\n}',
+    optionFields: [
       {
         type: 'select',
         key: 'indent',
-        label: 'JSON Formatting',
+        label: 'Indentation Style',
         options: [
-          { label: '2 Spaces (Readable)', value: '2' },
-          { label: '4 Spaces', value: '4' },
-          { label: 'Minified (Compact)', value: 'compact' },
+          { label: '2 Spaces (Standard)', value: '2' },
+          { label: '4 Spaces (Readable)', value: '4' },
+          { label: 'Minified (Compact single-line)', value: '0' },
+          { label: 'Tabs', value: 'tab' },
         ],
         default: '2',
       },
     ],
-    optionsHint: 'Converts CSV to JSON with duplicate header protection and multiline quote support.',
-  },
-
-  // ── DEVELOPER STUDIO ──────────────────────────────────
-  'json-formatter': {
-    processor: async (files, opts) => (await import('./developerTools')).jsonFormat(files[0], opts),
-    textPlaceholder: 'Paste raw JSON text here or upload a .json file…',
-    optionFields: [
-      {
-        type: 'select',
-        key: 'mode',
-        label: 'Formatting Style',
-        options: [
-          { label: '2 Spaces (Standard)', value: 'pretty2' },
-          { label: '4 Spaces', value: 'pretty4' },
-          { label: 'Tabs', value: 'tabs' },
-          { label: 'Minified (Single Line)', value: 'compact' },
-        ],
-        default: 'pretty2',
-      },
-    ],
-    optionsHint: 'Validates JSON syntax and provides exact line/column error diagnostics.',
+    optionsHint: 'Formats, validates, or minifies JSON data with line & column syntax diagnostics.',
   },
 
   'sql-formatter': {
     processor: async (files, opts) => (await import('./developerTools')).sqlFormat(files[0], opts),
-    textPlaceholder: 'Paste your SQL query here (SELECT u.id, u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id WHERE u.status = 1 GROUP BY u.id ORDER BY o.total DESC)…',
+    textPlaceholder: 'select u.id, u.email, count(j.id) as total_jobs from users u left join jobs j on u.id = j.user_id where u.active = 1 group by u.id, u.email order by total_jobs desc limit 10;',
     optionFields: [
       {
         type: 'select',
-        key: 'keywordCase',
-        label: 'Keyword Case',
+        key: 'casing',
+        label: 'Keyword Casing',
         options: [
-          { label: 'UPPERCASE (SELECT, FROM, WHERE)', value: 'upper' },
-          { label: 'lowercase (select, from, where)', value: 'lower' },
-          { label: 'Preserve Original', value: 'preserve' },
+          { label: 'UPPERCASE (Standard)', value: 'upper' },
+          { label: 'lowercase', value: 'lower' },
         ],
         default: 'upper',
       },
-      {
-        type: 'select',
-        key: 'indent',
-        label: 'Indentation',
-        options: [
-          { label: '2 Spaces', value: '2' },
-          { label: '4 Spaces', value: '4' },
-        ],
-        default: '2',
-      },
     ],
-    optionsHint: 'Formats complex SQL queries into clean, readable lines while preserving literals.',
+    optionsHint: 'Formats complex SQL queries with consistent keyword casing and readable indentation.',
   },
 
   'diff-checker': {
     processor: async (files, opts) => (await import('./developerTools')).diffCheck(files[0], opts),
-    textPlaceholder: '===ORIGINAL===\nconst x = 10;\nfunction greet() {\n  console.log("Hello");\n}\n===MODIFIED===\nconst x = 20;\nfunction greet(name) {\n  console.log("Hello, " + name);\n}',
-    optionsHint: 'Compares two text or code snippets using Myers LCS algorithm with additions/deletions.',
+    textPlaceholder: '===ORIGINAL===\nfunction convert(file) {\n  return process(file);\n}\n===MODIFIED===\nasync function convert(file, options = {}) {\n  const result = await process(file, options);\n  return result;\n}',
+    optionsHint: 'Computes line-by-line unified diff between original and modified text.',
   },
 
   'hash-generator': {
     processor: async (files, opts) => (await import('./developerTools')).hashGenerate(files[0], opts),
-    textPlaceholder: 'Enter any text to generate MD5, SHA-1, SHA-256, and SHA-512 hashes…',
-    optionsHint: 'Computes cryptographic hashes. MD5 and SHA-1 carry explicit vulnerability warnings.',
+    textPlaceholder: 'Enter text here to generate cryptographic hashes…',
+    optionFields: [
+      {
+        type: 'select',
+        key: 'algorithm',
+        label: 'Target Hash Algorithm',
+        options: [
+          { label: 'All Supported Hashes (MD5, SHA-1, SHA-256, SHA-512)', value: 'all' },
+          { label: 'SHA-256 (Modern Standard)', value: 'sha256' },
+          { label: 'MD5 (Legacy Checksum)', value: 'md5' },
+          { label: 'SHA-1 (Legacy Git)', value: 'sha1' },
+          { label: 'SHA-512 (High Security)', value: 'sha512' },
+        ],
+        default: 'all',
+      },
+    ],
+    optionsHint: 'Computes cryptographic hashes via Web Crypto APIs and pure MD5 engine.',
   },
 
   'base64-encoder-decoder': {
     processor: async (files, opts) => (await import('./developerTools')).base64Codec(files[0], opts),
-    textPlaceholder: 'Enter text to encode into Base64, or paste Base64 to decode…',
+    textPlaceholder: 'Enter text to encode to Base64, or paste Base64 to decode…',
     optionFields: [
       {
         type: 'select',
         key: 'mode',
-        label: 'Action Mode',
+        label: 'Operation Mode',
         options: [
           { label: 'Encode to Base64', value: 'encode' },
           { label: 'Decode from Base64', value: 'decode' },
         ],
         default: 'encode',
       },
-      { type: 'checkbox', key: 'urlSafe', label: 'URL-Safe encoding (RFC 4648 §5: - and _)', default: false },
+      { type: 'checkbox', key: 'urlSafe', label: 'Use URL-safe alphabet (- and _ without padding)', default: false },
     ],
-    optionsHint: 'Full Unicode & UTF-8 support with strict decoding error diagnostics.',
+    optionsHint: 'Encodes and decodes text with full UTF-8 Unicode support.',
   },
 
   'url-encoder-decoder': {
     processor: async (files, opts) => (await import('./developerTools')).urlCodec(files[0], opts),
-    textPlaceholder: 'Enter URL or text query to encode or decode (e.g. https://example.com/search?q=hello world & format=json)…',
+    textPlaceholder: 'https://convetpulse.onrender.com/search?q=pdf tools&category=developer studio',
     optionFields: [
       {
         type: 'select',
         key: 'mode',
-        label: 'Action Mode',
+        label: 'Operation Mode',
         options: [
-          { label: 'Encode URL', value: 'encode' },
-          { label: 'Decode URL', value: 'decode' },
+          { label: 'Encode URL Components', value: 'encode' },
+          { label: 'Decode URL Components', value: 'decode' },
+          { label: 'Full URI Encode', value: 'encode-full' },
         ],
         default: 'encode',
       },
-      { type: 'checkbox', key: 'component', label: 'Component mode (encodeURIComponent)', default: true },
     ],
-    optionsHint: 'Encodes and decodes URL percent sequences with UTF-8 support and error checks.',
+    optionsHint: 'Encodes and decodes percent-encoded URL components and parameters.',
   },
 
   'uuid-generator': {
     processor: async (files, opts) => (await import('./developerTools')).uuidGenerate(files[0], opts),
-    textPlaceholder: 'Click process to generate cryptographically secure UUID v4 identifiers…',
     optionFields: [
-      {
-        type: 'select',
-        key: 'count',
-        label: 'Number of UUIDs',
-        options: [
-          { label: '1 UUID', value: '1' },
-          { label: '5 UUIDs', value: '5' },
-          { label: '10 UUIDs', value: '10' },
-          { label: '25 UUIDs', value: '25' },
-          { label: '50 UUIDs', value: '50' },
-          { label: '100 UUIDs', value: '100' },
-        ],
-        default: '5',
-      },
+      { type: 'number', key: 'count', label: 'Quantity to Generate', min: 1, max: 100, default: 5 },
       {
         type: 'select',
         key: 'format',
-        label: 'Format Style',
+        label: 'Output Format',
         options: [
           { label: 'Standard Lowercase (xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx)', value: 'standard' },
           { label: 'Uppercase', value: 'uppercase' },
@@ -435,7 +537,7 @@ const dispatchMap: Record<string, ToolDispatch> = {
     optionsHint: 'Decodes header and payload claims locally. Cryptographic signature is NOT verified.',
   },
 
-  // ── PDF SECURITY STUDIO ──────────────────────────────
+  // ── PDF SECURITY STUDIO (5 tools) ─────────────────────
   'pdf-password-protect': {
     processor: async (files, opts) => (await import('./pdfSecurityTools')).pdfPasswordProtect(files[0], opts),
     optionFields: [
@@ -456,7 +558,7 @@ const dispatchMap: Record<string, ToolDispatch> = {
   'pdf-redact': {
     processor: async (files, opts) => (await import('./pdfSecurityTools')).pdfRedact(files[0], opts),
     optionFields: [
-      { type: 'text', key: 'searchTerm', label: 'Sensitive Phrase to Redact', placeholder: 'e.g. CONFIDENTIAL or SSN', default: 'CONFIDENTIAL' },
+      { type: 'text', key: 'searchTerm', label: 'Sensitive Phrase to Permanently Erase', placeholder: 'e.g. CONFIDENTIAL or SSN', default: 'CONFIDENTIAL' },
     ],
     optionsHint: 'Physically excises matching text operators from content streams and applies permanent visual redaction.',
   },
@@ -471,14 +573,51 @@ const dispatchMap: Record<string, ToolDispatch> = {
     optionsHint: 'Comprehensive security audit inspecting encryption, embedded JS, launch actions, signatures, and permissions.',
   },
 
-  // ── UTILITIES ────────────────────────────────────────
+  // ── UTILITIES (2 tools) ───────────────────────────────
   'qr-generator': {
     processor: async (files, opts) => (await import('./textTools')).runTextTool('qr-generator', files[0], opts),
     textPlaceholder: 'Enter the text or URL for the QR code…',
     optionFields: [{ type: 'number', key: 'size', label: 'Image size (px)', min: 128, max: 1024, default: 512 }],
   },
 
-  // ── ARCHIVE ──────────────────────────────────────────
+  'barcode-generator': {
+    processor: async (files, opts) => (await import('./barcodeTools')).processBarcode(files, opts),
+    textPlaceholder: 'CONVET-12345',
+    optionFields: [
+      {
+        type: 'select',
+        key: 'format',
+        label: 'Barcode Format',
+        options: [
+          { label: 'Code 128 (Standard Alphanumeric)', value: 'code128' },
+          { label: 'EAN-13 (13-Digit Retail / Grocery)', value: 'ean13' },
+          { label: 'UPC-A (12-Digit Retail USA)', value: 'upca' },
+          { label: 'EAN-8 (8-Digit Compact Retail)', value: 'ean8' },
+          { label: 'Code 39 (Industrial & Military)', value: 'code39' },
+          { label: 'ITF (Interleaved 2 of 5 - Shipping)', value: 'itf' },
+          { label: 'Codabar (Logistics & Libraries)', value: 'codabar' },
+        ],
+        default: 'code128',
+      },
+      { type: 'text', key: 'text', label: 'Barcode Content Value', placeholder: 'e.g. 9780201379624 or ITEM-123', default: 'CONVET-12345' },
+      {
+        type: 'select',
+        key: 'outputFormat',
+        label: 'Output Image Format',
+        options: [
+          { label: 'PNG (Raster Image)', value: 'png' },
+          { label: 'SVG (Scalable Vector)', value: 'svg' },
+        ],
+        default: 'png',
+      },
+      { type: 'range', key: 'width', label: 'Bar Width Scale', min: 1, max: 4, step: 1, default: 2 },
+      { type: 'range', key: 'height', label: 'Barcode Height (px)', min: 40, max: 160, step: 10, default: 80, unit: 'px' },
+      { type: 'checkbox', key: 'displayValue', label: 'Show human-readable text below barcode', default: true },
+    ],
+    optionsHint: 'Generates high-precision 1D barcodes with strict format validation and check-digit calculation.',
+  },
+
+  // ── ARCHIVE (2 tools) ─────────────────────────────────
   'zip-compressor': {
     multiFile: true,
     processor: async (files) => (await import('./processors')).createZip(files, 'archive.zip'),

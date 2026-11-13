@@ -221,6 +221,51 @@ export async function handleApiRoute(req, res, url) {
   }
 
   // ─────────────────────────────────────────────────────────
+  // PDF Cryptographic Security Endpoints (QPDF Integration)
+  // ─────────────────────────────────────────────────────────
+  if (pathname === '/api/pdf/encrypt' && method === 'POST') {
+    let hasQpdf = false;
+    try {
+      const { execSync } = await import('node:child_process');
+      execSync('qpdf --version', { stdio: 'ignore' });
+      hasQpdf = true;
+    } catch {
+      hasQpdf = false;
+    }
+
+    if (!hasQpdf) {
+      return sendJson(501, {
+        error: 'SYSTEM_BINARY_NOT_FOUND',
+        message: 'QPDF binary is not installed on this host environment. Genuine ISO 32000-2 AES-256 PDF encryption requires the QPDF system package. Pseudo-encryption will never be generated to protect document security.',
+        requirement: 'apt-get install -y qpdf (configured via Dockerfile or Render apt buildpack)',
+      });
+    }
+
+    return sendJson(200, { status: 'ready' });
+  }
+
+  if (pathname === '/api/pdf/decrypt' && method === 'POST') {
+    let hasQpdf = false;
+    try {
+      const { execSync } = await import('node:child_process');
+      execSync('qpdf --version', { stdio: 'ignore' });
+      hasQpdf = true;
+    } catch {
+      hasQpdf = false;
+    }
+
+    if (!hasQpdf) {
+      return sendJson(501, {
+        error: 'SYSTEM_BINARY_NOT_FOUND',
+        message: 'QPDF binary is not installed on this host environment. Genuine cryptographic PDF stream decryption requires the QPDF system package. Pseudo-decryption will never be generated to protect document integrity.',
+        requirement: 'apt-get install -y qpdf (configured via Dockerfile or Render apt buildpack)',
+      });
+    }
+
+    return sendJson(200, { status: 'ready' });
+  }
+
+  // ─────────────────────────────────────────────────────────
   // 5. Public Premium Configuration
   // ─────────────────────────────────────────────────────────
   if (pathname === '/api/premium/config' && method === 'GET') {

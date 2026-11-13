@@ -172,6 +172,23 @@ export async function pdfRedact(
       }
     }
 
+    // 3. Purge matching text from Annotations (/Annots)
+    const annotsRef = page.node.Annots();
+    if (annotsRef) {
+      const annotList = (annotsRef as any).asArray ? (annotsRef as any).asArray() : [annotsRef];
+      for (const aRef of annotList) {
+        const annotObj = pdfDoc.context.lookup(aRef) as any;
+        if (annotObj && annotObj.dict) {
+          const contentsEntry = annotObj.dict.get(PDFName.of('Contents'));
+          if (contentsEntry && typeof contentsEntry.value === 'string' && contentsEntry.value.includes(targetTerm)) {
+            annotObj.dict.delete(PDFName.of('Contents'));
+            redactedOccurrences++;
+            pageModified = true;
+          }
+        }
+      }
+    }
+
     if (pageModified) {
       pagesAffected.add(idx + 1);
       // Draw opaque permanent black redaction box on the page
@@ -184,6 +201,32 @@ export async function pdfRedact(
       });
     }
   }
+
+  // 4. Purge sensitive phrase from AcroForm fields
+  try {
+    const form = pdfDoc.getForm();
+    if (form) {
+      const fields = form.getFields();
+      for (const f of fields) {
+        try {
+          const textVal = (f as any).getText?.();
+          if (typeof textVal === 'string' && textVal.includes(targetTerm)) {
+            (f as any).setText?.(textVal.split(targetTerm).join(' '));
+            redactedOccurrences++;
+          }
+        } catch {
+          /* ignore non-text fields */
+        }
+      }
+    }
+  } catch {
+    /* form not present */
+  }
+
+  // 5. Purge sensitive phrase from document metadata
+  if (pdfDoc.getTitle()?.includes(targetTerm)) pdfDoc.setTitle('');
+  if (pdfDoc.getAuthor()?.includes(targetTerm)) pdfDoc.setAuthor('');
+  if (pdfDoc.getSubject()?.includes(targetTerm)) pdfDoc.setSubject('');
 
   // If term was not found anywhere in the content streams, DO NOT return fake success
   if (redactedOccurrences === 0) {

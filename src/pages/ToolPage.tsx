@@ -15,6 +15,8 @@ import { getToolDispatch, hasProcessor, type OptionField } from '@/lib/toolDispa
 import type { ProcessorResult } from '@/lib/processors';
 import { recordHistory } from '@/lib/history';
 import { DownloadCenter } from '@/components/tools/DownloadCenter';
+import { DeveloperWorkspace } from '@/components/tools/DeveloperWorkspace';
+import { BarcodeWorkspace } from '@/components/tools/BarcodeWorkspace';
 import { apiClient } from '@/lib/api';
 
 // ────────────────────────────────────────────────
@@ -42,18 +44,32 @@ interface ProcessingFile {
 
 const TOOL_PRESETS: Record<string, { label: string; desc: string; values: Record<string, unknown> }[]> = {
   'image-compressor': [
-    { label: 'Web Optimal', desc: 'Balanced 75% quality', values: { quality: 0.75, maxWidth: 1920 } },
-    { label: 'Max Compression', desc: '55% quality, smaller size', values: { quality: 0.55, maxWidth: 1280 } },
-    { label: 'Lossless / Crisp', desc: '90% quality, maximum detail', values: { quality: 0.90, maxWidth: 3840 } },
+    { label: 'Balanced (Recommended)', desc: '75% quality, 1080p full detail', values: { quality: 75, maxWidth: 1920 } },
+    { label: 'Smallest File', desc: '50% quality, smaller dimensions', values: { quality: 50, maxWidth: 1280 } },
+    { label: 'Best Quality', desc: '92% quality, maximum crispness', values: { quality: 92, maxWidth: 3840 } },
   ],
   'compress-pdf': [
-    { label: 'Medium (Balanced)', desc: 'Standard compression', values: { level: 'medium' } },
-    { label: 'High (Smallest)', desc: 'Maximum compression', values: { level: 'high' } },
-    { label: 'Low (Crisp Text)', desc: 'Minimal compression', values: { level: 'low' } },
+    { label: 'Balanced (Recommended)', desc: 'Crisp text and readable graphics', values: { level: 'medium' } },
+    { label: 'Smallest File', desc: 'Aggressive object compaction', values: { level: 'high' } },
+    { label: 'Best Quality', desc: 'Minimal compression, retains fidelity', values: { level: 'low' } },
+  ],
+  'image-converter': [
+    { label: 'WebP (Smallest File)', desc: 'Modern high-efficiency WebP format', values: { format: 'webp', quality: 85 } },
+    { label: 'JPEG (Universal)', desc: 'Standard photo compatibility', values: { format: 'jpeg', quality: 85 } },
+    { label: 'PNG (Lossless)', desc: 'Preserves sharp text and transparency', values: { format: 'png', quality: 100 } },
   ],
   'split-pdf': [
     { label: 'All Pages', desc: 'Split each page individually', values: { mode: 'each' } },
     { label: 'Page Range', desc: 'Extract custom page ranges', values: { mode: 'range' } },
+  ],
+  'excel-to-pdf': [
+    { label: 'Landscape (Wide Tables)', desc: 'Expands wide columns cleanly', values: { orientation: 'landscape' } },
+    { label: 'Portrait (Standard)', desc: 'Vertical document orientation', values: { orientation: 'portrait' } },
+  ],
+  'add-page-numbers': [
+    { label: 'Bottom Center', desc: 'Standard Page X of Y', values: { position: 'bottom-center', format: 'Page {n} of {total}' } },
+    { label: 'Bottom Right', desc: 'Page numbers at outer right', values: { position: 'bottom-right', format: 'Page {n} of {total}' } },
+    { label: 'Header Right', desc: 'Top right corner numbering', values: { position: 'top-right', format: 'Page {n} of {total}' } },
   ],
 };
 
@@ -1159,6 +1175,15 @@ export const ToolPage: React.FC = () => {
 
   const setOption = (key: string, value: unknown) => setOptions((prev) => ({ ...prev, [key]: value }));
 
+  const handleDeveloperProcess = useCallback(async (inputStr: string, extraOpts: Record<string, unknown> = {}): Promise<string> => {
+    if (!dispatch) throw new Error('No processor available for this tool.');
+    const dummyFile = new File([inputStr], `${slug || 'developer'}-input.txt`, { type: 'text/plain' });
+    const mergedOpts = { ...options, ...extraOpts };
+    const res = await dispatch.processor([dummyFile], mergedOpts);
+    const single = Array.isArray(res) ? res[0] : res;
+    return await single.blob.text();
+  }, [dispatch, slug, options]);
+
   const acceptMap = useMemo(() => (tool?.supportedInputFormats ?? []).reduce(
     (acc, fmt) => {
       const mime = fmt === 'pdf' ? 'application/pdf'
@@ -1420,389 +1445,318 @@ export const ToolPage: React.FC = () => {
               </div>
             )}
 
-            {/* Guided Workflow Stepper */}
-            <nav aria-label="Tool steps" className="mb-6 p-1.5 rounded-xl border flex items-center gap-1 sm:gap-2 flex-wrap" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
-              {/* Step 1: Input */}
-              <button
-                type="button"
-                onClick={() => setActiveTab('upload')}
-                className={`flex-1 min-w-[130px] flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
-                  activeTab === 'upload' ? 'shadow-sm' : 'hover:bg-hover-cv opacity-80 hover:opacity-100'
-                }`}
-                style={{
-                  backgroundColor: activeTab === 'upload' ? `${meta.color}15` : 'transparent',
-                  color: activeTab === 'upload' ? meta.color : 'var(--text-secondary)',
-                }}
-              >
-                <span
-                  className="w-5 h-5 rounded-full flex items-center justify-center text-2xs font-bold"
-                  style={{
-                    backgroundColor: files.length > 0 || urlInput || textInput ? '#22c55e' : (activeTab === 'upload' ? meta.color : 'var(--muted)'),
-                    color: files.length > 0 || urlInput || textInput || activeTab === 'upload' ? '#ffffff' : 'var(--text-muted)',
-                  }}
-                >
-                  {files.length > 0 || urlInput || textInput ? <Check size={11} strokeWidth={3} /> : '1'}
-                </span>
-                <span className="truncate">1. {isUrlTool ? 'Enter URL' : isTextTool ? 'Provide Text' : 'Select Files'}</span>
-                {files.length > 0 && (
-                  <span className="badge badge-success text-2xs ml-auto" style={{ fontSize: '10px' }}>
-                    {files.length} ready
-                  </span>
-                )}
-              </button>
-
-              <ChevronRight size={13} className="text-muted-cv hidden sm:block flex-shrink-0" />
-
-              {/* Step 2: Options */}
-              <button
-                type="button"
-                onClick={() => setActiveTab('options')}
-                className={`flex-1 min-w-[130px] flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
-                  activeTab === 'options' ? 'shadow-sm' : 'hover:bg-hover-cv opacity-80 hover:opacity-100'
-                }`}
-                style={{
-                  backgroundColor: activeTab === 'options' ? `${meta.color}15` : 'transparent',
-                  color: activeTab === 'options' ? meta.color : 'var(--text-secondary)',
-                }}
-              >
-                <span
-                  className="w-5 h-5 rounded-full flex items-center justify-center text-2xs font-bold"
-                  style={{
-                    backgroundColor: activeTab === 'options' ? meta.color : 'var(--muted)',
-                    color: activeTab === 'options' ? '#ffffff' : 'var(--text-muted)',
-                  }}
-                >
-                  2
-                </span>
-                <span className="truncate">2. Configure</span>
-                <span className="text-2xs text-muted-cv ml-auto" style={{ fontSize: '10px' }}>
-                  {(dispatch?.optionFields?.length ?? 0) > 0 ? `${dispatch!.optionFields!.length} settings` : 'Default'}
-                </span>
-              </button>
-
-              <ChevronRight size={13} className="text-muted-cv hidden sm:block flex-shrink-0" />
-
-              {/* Step 3: Result */}
-              <button
-                type="button"
-                onClick={() => setActiveTab('result')}
-                className={`flex-1 min-w-[130px] flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
-                  activeTab === 'result' ? 'shadow-sm' : 'hover:bg-hover-cv opacity-80 hover:opacity-100'
-                }`}
-                style={{
-                  backgroundColor: activeTab === 'result' ? `${meta.color}15` : 'transparent',
-                  color: activeTab === 'result' ? meta.color : 'var(--text-secondary)',
-                }}
-              >
-                <span
-                  className="w-5 h-5 rounded-full flex items-center justify-center text-2xs font-bold"
-                  style={{
-                    backgroundColor: completedCount > 0 ? '#22c55e' : (activeTab === 'result' ? meta.color : 'var(--muted)'),
-                    color: completedCount > 0 || activeTab === 'result' ? '#ffffff' : 'var(--text-muted)',
-                  }}
-                >
-                  {completedCount > 0 ? <Check size={11} strokeWidth={3} /> : '3'}
-                </span>
-                <span className="truncate">3. Results &amp; Download</span>
-                {completedCount > 0 && (
-                  <span className="badge badge-success text-2xs ml-auto" style={{ fontSize: '10px' }}>
-                    {completedCount} done
-                  </span>
-                )}
-              </button>
-            </nav>
-
-            {/* Upload / Input tab */}
-            {activeTab === 'upload' && (
-              <div className="space-y-4">
-                {/* Privacy reminder banner */}
-                <div
-                  className="p-3.5 rounded-xl border flex items-center justify-between gap-3 text-xs"
-                  style={{
-                    backgroundColor: implemented && tool.processingMode === 'local' ? '#22c55e08' : '#3b82f608',
-                    borderColor: implemented && tool.processingMode === 'local' ? '#22c55e25' : '#3b82f625',
-                  }}
-                >
-                  <div className="flex items-center gap-2.5">
-                    {implemented && tool.processingMode === 'local' ? (
-                      <WifiOff size={16} className="text-success-600 flex-shrink-0" />
-                    ) : (
-                      <Cloud size={16} style={{ color: '#3b82f6' }} className="flex-shrink-0" />
+            {/* Developer Workspace & Barcode Workspace Special Views */}
+            {tool.category === 'developer' ? (
+              <DeveloperWorkspace
+                tool={tool}
+                dispatch={dispatch!}
+                onProcess={handleDeveloperProcess}
+                options={options}
+                setOption={setOption}
+                color={meta.color}
+              />
+            ) : tool.slug === 'barcode-generator' ? (
+              <BarcodeWorkspace color={meta.color} />
+            ) : (
+              <>
+                {/* Guided Workflow Stepper */}
+                <nav aria-label="Tool steps" className="mb-6 p-1.5 rounded-xl border flex items-center gap-1 sm:gap-2 flex-wrap" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
+                  {/* Step 1: Input */}
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('upload')}
+                    className={`flex-1 min-w-[130px] flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
+                      activeTab === 'upload' ? 'shadow-sm' : 'hover:bg-hover-cv opacity-80 hover:opacity-100'
+                    }`}
+                    style={{
+                      backgroundColor: activeTab === 'upload' ? `${meta.color}15` : 'transparent',
+                      color: activeTab === 'upload' ? meta.color : 'var(--text-secondary)',
+                    }}
+                  >
+                    <span
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-2xs font-bold"
+                      style={{
+                        backgroundColor: files.length > 0 || urlInput || textInput ? '#22c55e' : (activeTab === 'upload' ? meta.color : 'var(--muted)'),
+                        color: files.length > 0 || urlInput || textInput || activeTab === 'upload' ? '#ffffff' : 'var(--text-muted)',
+                      }}
+                    >
+                      {files.length > 0 || urlInput || textInput ? <Check size={11} strokeWidth={3} /> : '1'}
+                    </span>
+                    <span className="truncate">1. Configure &amp; Upload</span>
+                    {files.length > 0 && (
+                      <span className="badge badge-success text-2xs ml-auto" style={{ fontSize: '10px' }}>
+                        {files.length} ready
+                      </span>
                     )}
-                    <span className="text-secondary">
-                      {implemented && tool.processingMode === 'local'
-                        ? 'Files are processed 100% locally on your computer. Zero uploads, total privacy.'
-                        : 'Processes securely via companion backend service.'}
-                    </span>
-                  </div>
-                  {tool.batchSupported && (
-                    <span className="badge badge-neutral text-2xs flex-shrink-0">
-                      Batch Enabled
-                    </span>
-                  )}
-                </div>
+                  </button>
 
-                {/* URL input mode */}
-                {isUrlTool && (
-                  <UrlInputPanel
-                    value={urlInput}
-                    onChange={setUrlInput}
-                    onSubmit={handleUrlProcess}
-                    isRunning={isRunning}
-                    color={meta.color}
-                    hint={dispatch?.optionsHint}
-                  />
-                )}
+                  <ChevronRight size={13} className="text-muted-cv hidden sm:block flex-shrink-0" />
 
-                {/* Text input mode */}
-                {isTextTool && (
-                  <form onSubmit={handleTextProcess} className="space-y-3">
-                    <label htmlFor="tool-text-input" className="label">Input Text</label>
-                    <textarea
-                      id="tool-text-input"
-                      value={textInput}
-                      onChange={(e) => setTextInput(e.target.value)}
-                      placeholder={dispatch?.textPlaceholder}
-                      rows={8}
-                      className="input-lg w-full resize-y font-mono text-sm"
-                    />
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="submit"
-                        disabled={isRunning || (!textInput.trim() && !canRunEmptyText)}
-                        className="btn-primary btn-lg gap-2"
-                        style={{ backgroundColor: meta.color, opacity: isRunning ? 0.7 : 1 }}
-                      >
-                        {isRunning ? <><Loader2 size={16} className="animate-spin" />Processing…</> : <><Sparkles size={16} />{tool.name}</>}
-                      </button>
-                      {dispatch?.optionFields && dispatch.optionFields.length > 0 && (
-                        <button type="button" onClick={() => setActiveTab('options')} className="btn-secondary btn-md gap-1.5">
-                          <Settings size={14} />Configure Options
-                        </button>
+                  {/* Step 2: Result */}
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('result')}
+                    className={`flex-1 min-w-[130px] flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
+                      activeTab === 'result' ? 'shadow-sm' : 'hover:bg-hover-cv opacity-80 hover:opacity-100'
+                    }`}
+                    style={{
+                      backgroundColor: activeTab === 'result' ? `${meta.color}15` : 'transparent',
+                      color: activeTab === 'result' ? meta.color : 'var(--text-secondary)',
+                    }}
+                  >
+                    <span
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-2xs font-bold"
+                      style={{
+                        backgroundColor: completedCount > 0 ? '#22c55e' : (activeTab === 'result' ? meta.color : 'var(--muted)'),
+                        color: completedCount > 0 || activeTab === 'result' ? '#ffffff' : 'var(--text-muted)',
+                      }}
+                    >
+                      {completedCount > 0 ? <Check size={11} strokeWidth={3} /> : '2'}
+                    </span>
+                    <span className="truncate">2. Results &amp; Download</span>
+                    {completedCount > 0 && (
+                      <span className="badge badge-success text-2xs ml-auto" style={{ fontSize: '10px' }}>
+                        {completedCount} done
+                      </span>
+                    )}
+                  </button>
+                </nav>
+
+                {/* Upload / Input tab */}
+                {activeTab === 'upload' && (
+                  <div className="space-y-5">
+                    {/* Privacy reminder banner */}
+                    <div
+                      className="p-3.5 rounded-xl border flex items-center justify-between gap-3 text-xs"
+                      style={{
+                        backgroundColor: implemented && tool.processingMode === 'local' ? '#22c55e08' : '#3b82f608',
+                        borderColor: implemented && tool.processingMode === 'local' ? '#22c55e25' : '#3b82f625',
+                      }}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        {implemented && tool.processingMode === 'local' ? (
+                          <WifiOff size={16} className="text-success-600 flex-shrink-0" />
+                        ) : (
+                          <Cloud size={16} style={{ color: '#3b82f6' }} className="flex-shrink-0" />
+                        )}
+                        <span className="text-secondary">
+                          {implemented && tool.processingMode === 'local'
+                            ? 'Files are processed 100% locally on your computer. Zero uploads, total privacy.'
+                            : 'Processes securely via companion backend service.'}
+                        </span>
+                      </div>
+                      {tool.batchSupported && (
+                        <span className="badge badge-neutral text-2xs flex-shrink-0">
+                          Batch Enabled
+                        </span>
                       )}
                     </div>
-                  </form>
-                )}
 
-                {/* File upload mode (default, also used by signature tools) */}
-                {!isTextTool && !isUrlTool && (
-                  <>
-                    {/* Signature pad (for sign-pdf) */}
-                    {isSignatureTool && (
-                      <div className="mb-4">
-                        <SignaturePad
-                          color={meta.color}
-                          onSignature={(dataUrl) => {
-                            setSignatureDataUrl(dataUrl);
-                            setOption('signatureDataUrl', dataUrl);
+                    {/* Inline Configuration Directly on the File Upload Page */}
+                    {dispatch?.optionFields && dispatch.optionFields.length > 0 && (
+                      <div
+                        className="p-5 rounded-2xl border shadow-sm space-y-4"
+                        style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}
+                      >
+                        <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: 'var(--border)' }}>
+                          <div className="flex items-center gap-2">
+                            <Settings size={16} style={{ color: meta.color }} />
+                            <h2 className="text-sm font-bold text-primary">Configuration &amp; Output Settings</h2>
+                          </div>
+                          <span className="text-2xs text-muted-cv">Adjust options before processing</span>
+                        </div>
+
+                        {/* Quick Presets Bar (Smallest File, Balanced, Best Quality) */}
+                        {TOOL_PRESETS[tool.slug] && (
+                          <div className="space-y-1.5">
+                            <label className="text-2xs font-semibold uppercase tracking-wider text-muted-cv">
+                              Quality &amp; Compression Presets
+                            </label>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                              {TOOL_PRESETS[tool.slug].map((pr) => (
+                                <button
+                                  key={pr.label}
+                                  type="button"
+                                  onClick={() => {
+                                    setOptions((prev) => ({ ...prev, ...pr.values }));
+                                  }}
+                                  className="p-2.5 rounded-xl border text-left transition-all hover:border-accent hover:bg-hover-cv"
+                                  style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}
+                                >
+                                  <p className="text-xs font-semibold text-primary">{pr.label}</p>
+                                  <p className="text-2xs text-muted-cv mt-0.5">{pr.desc}</p>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <OptionsPanel
+                          fields={dispatch.optionFields}
+                          values={options}
+                          onChange={setOption}
+                          onReset={() => {
+                            const defaults: Record<string, unknown> = {};
+                            dispatch.optionFields?.forEach((f) => { defaults[f.key] = f.default; });
+                            setOptions(defaults);
                           }}
+                          hint={dispatch.optionsHint}
+                          color={meta.color}
                         />
                       </div>
                     )}
 
-                    {tool.inputTypes?.includes('camera') && (
-                      <CameraCapture
-                        onCapture={(capturedFile) => handleFiles([capturedFile])}
+                    {/* URL input mode */}
+                    {isUrlTool && (
+                      <UrlInputPanel
+                        value={urlInput}
+                        onChange={setUrlInput}
+                        onSubmit={handleUrlProcess}
+                        isRunning={isRunning}
                         color={meta.color}
+                        hint={dispatch?.optionsHint}
                       />
                     )}
 
-                    <UploadZone
-                      onFiles={handleFiles}
-                      multiple={tool.batchSupported || dispatch?.multiFile}
-                      supportedFormats={tool.supportedInputFormats}
-                      color={meta.color}
-                      accept={acceptMap}
-                      disabled={isDisabled || isMaintenance}
-                      disabledReason={isDisabled ? 'Tool is temporarily disabled by administrator' : isMaintenance ? 'Tool is currently under scheduled maintenance' : undefined}
-                    />
-                  </>
-                )}
-
-                {/* File list & Obvious Next Step Action Banner */}
-                {!isTextTool && !isUrlTool && files.length > 0 && (
-                  <div className="space-y-3 pt-2">
-                    {/* High-visibility next step guidance banner */}
-                    <div
-                      className="p-4 rounded-xl border flex items-center justify-between flex-wrap gap-4"
-                      style={{ backgroundColor: 'var(--card)', borderColor: `${meta.color}40`, boxShadow: `0 2px 12px ${meta.color}10` }}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div
-                          className="w-10 h-10 rounded-xl flex items-center justify-center text-white flex-shrink-0"
-                          style={{ backgroundColor: meta.color }}
-                        >
-                          <Sparkles size={18} />
-                        </div>
-                        <div>
-                          <p className="text-sm font-semibold text-primary">
-                            {files.length} file{files.length !== 1 ? 's' : ''} ready to process
-                          </p>
-                          <p className="text-xs text-muted-cv">
-                            Proceed directly or customize options in step 2.
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {dispatch?.optionFields && dispatch.optionFields.length > 0 && (
+                    {/* Text input mode */}
+                    {isTextTool && (
+                      <form onSubmit={handleTextProcess} className="space-y-3">
+                        <label htmlFor="tool-text-input" className="label">Input Text</label>
+                        <textarea
+                          id="tool-text-input"
+                          value={textInput}
+                          onChange={(e) => setTextInput(e.target.value)}
+                          placeholder={dispatch?.textPlaceholder}
+                          rows={8}
+                          className="input-lg w-full resize-y font-mono text-sm"
+                        />
+                        <div className="flex items-center gap-3">
                           <button
-                            type="button"
-                            onClick={() => setActiveTab('options')}
-                            className="btn-secondary btn-md gap-1.5"
+                            type="submit"
+                            disabled={isRunning || (!textInput.trim() && !canRunEmptyText)}
+                            className="btn-primary btn-lg gap-2"
+                            style={{ backgroundColor: meta.color, opacity: isRunning ? 0.7 : 1 }}
                           >
-                            <Settings size={14} />
-                            Options ({dispatch.optionFields.length})
+                            {isRunning ? <><Loader2 size={16} className="animate-spin" />Processing…</> : <><Sparkles size={16} />{tool.name}</>}
                           </button>
+                        </div>
+                      </form>
+                    )}
+
+                    {/* File upload mode */}
+                    {!isTextTool && !isUrlTool && (
+                      <>
+                        {/* Signature pad (for sign-pdf) */}
+                        {isSignatureTool && (
+                          <div className="mb-4">
+                            <SignaturePad
+                              color={meta.color}
+                              onSignature={(dataUrl) => {
+                                setSignatureDataUrl(dataUrl);
+                                setOption('signatureDataUrl', dataUrl);
+                              }}
+                            />
+                          </div>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => handleProcess()}
-                          disabled={isRunning || (isSignatureTool && !signatureDataUrl)}
-                          className="btn-primary btn-md gap-2"
-                          style={{ backgroundColor: meta.color }}
+
+                        {tool.inputTypes?.includes('camera') && (
+                          <CameraCapture
+                            onCapture={(capturedFile) => handleFiles([capturedFile])}
+                            color={meta.color}
+                          />
+                        )}
+
+                        <UploadZone
+                          onFiles={handleFiles}
+                          multiple={tool.batchSupported || dispatch?.multiFile}
+                          supportedFormats={tool.supportedInputFormats}
+                          color={meta.color}
+                          accept={acceptMap}
+                          disabled={isDisabled || isMaintenance}
+                          disabledReason={isDisabled ? 'Tool is temporarily disabled by administrator' : isMaintenance ? 'Tool is currently under scheduled maintenance' : undefined}
+                        />
+                      </>
+                    )}
+
+                    {/* Selected File list & Direct Process Action */}
+                    {!isTextTool && !isUrlTool && files.length > 0 && (
+                      <div className="space-y-3 pt-2">
+                        {/* High-visibility Action Banner */}
+                        <div
+                          className="p-4 rounded-xl border flex items-center justify-between flex-wrap gap-4"
+                          style={{ backgroundColor: 'var(--card)', borderColor: `${meta.color}40`, boxShadow: `0 2px 12px ${meta.color}10` }}
                         >
-                          {isRunning ? (
-                            <><Loader2 size={16} className="animate-spin" />Processing…</>
-                          ) : (
-                            <><Sparkles size={16} />Start Conversion<ArrowRight size={14} /></>
-                          )}
-                        </button>
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="w-10 h-10 rounded-xl flex items-center justify-center text-white flex-shrink-0"
+                              style={{ backgroundColor: meta.color }}
+                            >
+                              <Sparkles size={18} />
+                            </div>
+                            <div>
+                              <p className="text-sm font-semibold text-primary">
+                                {files.length} file{files.length !== 1 ? 's' : ''} ready to process
+                              </p>
+                              <p className="text-xs text-muted-cv">
+                                Configuration applied. Click Process to convert.
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleProcess()}
+                              disabled={isRunning || (isSignatureTool && !signatureDataUrl)}
+                              className="btn-primary btn-md gap-2 font-bold shadow-md"
+                              style={{ backgroundColor: meta.color }}
+                            >
+                              {isRunning ? (
+                                <><Loader2 size={16} className="animate-spin" />Processing…</>
+                              ) : (
+                                <><Sparkles size={16} />Process File<ArrowRight size={14} /></>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-1">
+                          <p className="text-xs font-semibold text-muted-cv uppercase tracking-wider">
+                            Selected Files ({files.length})
+                          </p>
+                          <button
+                            onClick={() => setFiles([])}
+                            className="text-xs text-muted-cv hover:text-error-600 transition-colors flex items-center gap-1"
+                          >
+                            <Trash2 size={11} /> Clear all
+                          </button>
+                        </div>
+
+                        <div className="space-y-2">
+                          {files.map((pf) => (
+                            <FileItem key={pf.id} pf={pf} color={meta.color} onRemove={handleRemove} onDownload={handleDownload} />
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    )}
 
-                    <div className="flex items-center justify-between pt-1">
-                      <p className="text-xs font-semibold text-muted-cv uppercase tracking-wider">
-                        Selected Files ({files.length})
-                      </p>
-                      <button
-                        onClick={() => setFiles([])}
-                        className="text-xs text-muted-cv hover:text-error-600 transition-colors flex items-center gap-1"
+                    {/* Not implemented notice */}
+                    {!implemented && (
+                      <div className="flex items-start gap-3 p-4 rounded-xl border mt-4"
+                        style={{ backgroundColor: 'var(--muted)', borderColor: 'var(--border)' }}
                       >
-                        <Trash2 size={11} /> Clear all
-                      </button>
-                    </div>
-
-                    <div className="space-y-2">
-                      {files.map((pf) => (
-                        <FileItem key={pf.id} pf={pf} color={meta.color} onRemove={handleRemove} onDownload={handleDownload} />
-                      ))}
-                    </div>
+                        <AlertCircle size={16} style={{ color: '#f59e0b', flexShrink: 0, marginTop: 2 }} />
+                        <div>
+                          <p className="text-sm font-medium text-primary mb-1">Processor preview</p>
+                          <p className="text-xs text-muted-cv leading-relaxed">
+                            This tool is registered in the catalog and will execute once its dedicated engine is connected.
+                            No mock or fake conversion outputs are produced.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
-
-                {/* Not implemented notice */}
-                {!implemented && (
-                  <div className="flex items-start gap-3 p-4 rounded-xl border mt-4"
-                    style={{ backgroundColor: 'var(--muted)', borderColor: 'var(--border)' }}
-                  >
-                    <AlertCircle size={16} style={{ color: '#f59e0b', flexShrink: 0, marginTop: 2 }} />
-                    <div>
-                      <p className="text-sm font-medium text-primary mb-1">Processor preview</p>
-                      <p className="text-xs text-muted-cv leading-relaxed">
-                        This tool is registered in the catalog and will execute once its dedicated engine is connected.
-                        No mock or fake conversion outputs are produced.
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Options tab */}
-            {activeTab === 'options' && (
-              <div className="p-6 rounded-xl border" style={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)' }}>
-                <div className="flex items-center justify-between mb-6 pb-3 border-b" style={{ borderColor: 'var(--border)' }}>
-                  <div>
-                    <h3 className="text-sm font-semibold text-primary">Tool Configuration</h3>
-                    <p className="text-xs text-muted-cv mt-0.5">Adjust settings to customize your output</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('upload')}
-                    className="btn-ghost btn-sm gap-1 text-xs"
-                  >
-                    <ArrowLeft size={13} /> Back to Files
-                  </button>
-                </div>
-
-                {/* Conversion Presets */}
-                {TOOL_PRESETS[tool.slug] && (
-                  <div className="mb-6 p-4 rounded-xl border bg-hover-cv/40" style={{ borderColor: 'var(--border)' }}>
-                    <p className="text-2xs font-semibold uppercase tracking-wider text-muted-cv mb-2.5">
-                      Quick Presets
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      {TOOL_PRESETS[tool.slug].map((pr) => (
-                        <button
-                          key={pr.label}
-                          type="button"
-                          onClick={() => {
-                            setOptions((prev) => ({ ...prev, ...pr.values }));
-                          }}
-                          className="p-2.5 rounded-lg border text-left transition-all hover:border-accent hover:bg-card"
-                          style={{ borderColor: 'var(--border)', backgroundColor: 'var(--card)' }}
-                        >
-                          <p className="text-xs font-semibold text-primary">{pr.label}</p>
-                          <p className="text-2xs text-muted-cv mt-0.5">{pr.desc}</p>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {dispatch?.optionFields && dispatch.optionFields.length > 0 ? (
-                  <OptionsPanel
-                    fields={dispatch.optionFields}
-                    values={options}
-                    onChange={setOption}
-                    onReset={() => {
-                      const defaults: Record<string, unknown> = {};
-                      dispatch.optionFields?.forEach((f) => { defaults[f.key] = f.default; });
-                      setOptions(defaults);
-                    }}
-                    hint={dispatch.optionsHint}
-                    color={meta.color}
-                  />
-                ) : (
-                  <div className="flex items-start gap-3 p-4 rounded-lg border"
-                    style={{ backgroundColor: 'var(--muted)', borderColor: 'var(--border)' }}
-                  >
-                    <Info size={16} style={{ color: 'var(--text-muted)', flexShrink: 0, marginTop: 2 }} />
-                    <p className="text-xs text-muted-cv leading-relaxed">
-                      This tool uses automatic optimal settings and has no extra configuration required.
-                    </p>
-                  </div>
-                )}
-
-                {/* Clear Next Step from Options */}
-                <div className="mt-8 pt-4 border-t flex items-center justify-between gap-3 flex-wrap" style={{ borderColor: 'var(--border)' }}>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('upload')}
-                    className="btn-secondary btn-md gap-1.5"
-                  >
-                    <ArrowLeft size={14} /> Back to File Upload
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (files.length === 0 && !isUrlTool && !isTextTool) {
-                        setActiveTab('upload');
-                      } else if (isUrlTool) {
-                        handleUrlProcess();
-                      } else {
-                        void handleProcess();
-                      }
-                    }}
-                    className="btn-primary btn-md gap-2"
-                    style={{ backgroundColor: meta.color }}
-                  >
-                    <Sparkles size={14} />
-                    {files.length > 0 || urlInput ? 'Apply Settings & Convert Now' : 'Save & Select Files'}
-                    <ArrowRight size={14} />
-                  </button>
-                </div>
-              </div>
+              </>
             )}
 
             {/* Result tab */}
