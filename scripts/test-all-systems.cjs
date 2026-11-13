@@ -980,6 +980,125 @@ async function runTests() {
     assert(text.includes('CRYPTOGRAPHIC SIGNATURE IS NOT VERIFIED'), 'Must display bold signature warning');
   });
 
+  await testAsync('Dev: Regex Tester blocks catastrophic backtracking (ReDoS) patterns', async () => {
+    // Nested quantifier ReDoS vector
+    const redosInput = '===PATTERN===\n(a+)+$\n===TEST_STRING===\naaaaaaaaaaaaaaaaaaaaaaaaaaaa!';
+    const mockFile = new File([redosInput], 'redos.txt', { type: 'text/plain' });
+    let blocked = false;
+    try {
+      await devTools.regexTest(mockFile);
+    } catch (err) {
+      if (err.code === 'REDOS_PATTERN_RISK') blocked = true;
+    }
+    assert.strictEqual(blocked, true, 'Nested quantifier ReDoS pattern must be blocked');
+  });
+
+  // ── 9. PDF Security Studio Verification ──────────────────
+  console.log('\n--- 9. PDF Security Studio Verification ---');
+  const pdfSecTools = await import('../src/lib/pdfSecurityTools.ts');
+  const { PDFDocument, StandardFonts } = await import('pdf-lib');
+
+  await testAsync('PDF: Redaction physically purges text tokens from content streams', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([400, 400]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText('CONFIDENTIAL_SECRET_123', { x: 50, y: 300, size: 14, font });
+    const originalBytes = await doc.save();
+
+    const mockFile = new File([originalBytes], 'secret.pdf', { type: 'application/pdf' });
+    const redactRes = await pdfSecTools.pdfRedact(mockFile, { searchTerm: 'CONFIDENTIAL_SECRET_123' });
+    const redactedBytes = await redactRes.blob.arrayBuffer();
+
+    // Verify by reloading PDF and inspecting stream contents
+    const docReloaded = await PDFDocument.load(redactedBytes);
+    const pReloaded = docReloaded.getPage(0);
+    const contents = pReloaded.node.Contents();
+    const ref = contents.asArray ? contents.asArray()[0] : contents;
+    const streamObj = docReloaded.context.lookup(ref);
+
+    // Decompress stream to ensure string is gone
+    const ds = new DecompressionStream('deflate');
+    const writer = ds.writable.getWriter();
+    writer.write(streamObj.contents);
+    writer.close();
+    const reader = ds.readable.getReader();
+    const chunks = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
+    const fullStream = new Uint8Array(totalLen);
+    let off = 0;
+    for (const c of chunks) {
+      fullStream.set(c, off);
+      off += c.length;
+    }
+    const streamStr = new TextDecoder('latin1').decode(fullStream);
+
+    assert(!streamStr.includes('CONFIDENTIAL_SECRET_123'), 'Plaintext string must be expunged');
+    assert(!streamStr.includes('434F4E464944454E5449414C5F5345435245545F313233'), 'Hexadecimal string must be expunged');
+    assert.strictEqual(redactRes.meta?.redactedOccurrences, 1);
+  });
+
+  await testAsync('PDF: Redaction reports phrase not found rather than faking success', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([400, 400]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText('Public Information Only', { x: 50, y: 300, size: 14, font });
+    const bytes = await doc.save();
+
+    const mockFile = new File([bytes], 'public.pdf', { type: 'application/pdf' });
+    let threwNotFound = false;
+    try {
+      await pdfSecTools.pdfRedact(mockFile, { searchTerm: 'NON_EXISTENT_SECRET' });
+    } catch (err) {
+      if (err.code === 'PHRASE_NOT_FOUND') threwNotFound = true;
+    }
+    assert.strictEqual(threwNotFound, true, 'Missing phrase must throw PHRASE_NOT_FOUND error');
+  });
+
+  await testAsync('PDF: Metadata cleaner purges Info dictionary and XMP metadata stream', async () => {
+    const doc = await PDFDocument.create();
+    doc.setTitle('Classified Operation');
+    doc.setAuthor('Secret Author');
+    const page = doc.addPage([400, 400]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText('Hello', { x: 50, y: 300, size: 12, font });
+    const bytes = await doc.save();
+
+    const mockFile = new File([bytes], 'doc.pdf', { type: 'application/pdf' });
+    const cleanRes = await pdfSecTools.pdfMetadataCleaner(mockFile);
+    const cleanedBytes = await cleanRes.blob.arrayBuffer();
+
+    const docClean = await PDFDocument.load(cleanedBytes);
+    assert(!docClean.getTitle(), 'Title must be empty');
+    assert(!docClean.getAuthor(), 'Author must be empty');
+  });
+
+  await testAsync('PDF: Password protect rejects pseudo-encryption with clear safety notice', async () => {
+    const mockFile = new File(['%PDF-1.4 sample'], 'doc.pdf', { type: 'application/pdf' });
+    let threwSafetyError = false;
+    try {
+      await pdfSecTools.pdfPasswordProtect(mockFile, { password: '123' });
+    } catch (err) {
+      if (err.code === 'ENCRYPTION_ENGINE_UNAVAILABLE') threwSafetyError = true;
+    }
+    assert.strictEqual(threwSafetyError, true, 'Pseudo-encryption must be safely blocked');
+  });
+
+  await testAsync('PDF: Unlock rejects pseudo-decryption with clear safety notice', async () => {
+    const mockFile = new File(['%PDF-1.4 sample'], 'doc.pdf', { type: 'application/pdf' });
+    let threwSafetyError = false;
+    try {
+      await pdfSecTools.pdfUnlock(mockFile, { password: '123' });
+    } catch (err) {
+      if (err.code === 'DECRYPTION_ENGINE_UNAVAILABLE') threwSafetyError = true;
+    }
+    assert.strictEqual(threwSafetyError, true, 'Pseudo-decryption must be safely blocked');
+  });
+
   // Summary
   console.log('\n========================================');
   console.log(`QA RESULTS: ${passed} passed, ${failed} failed`);

@@ -689,6 +689,24 @@ export async function regexTest(
     throw new ProcessorError('Please enter a regular expression pattern.', 'EMPTY_PATTERN');
   }
 
+  // Static ReDoS Protection (Catastrophic Backtracking Guard)
+  if (/\([^()]*[+*][^()]*\)[+*{]/i.test(pattern)) {
+    throw new ProcessorError(
+      "Potential Catastrophic Backtracking (ReDoS) detected: Pattern contains nested quantifiers '(x+)+' or '(x*)*' which cause exponential execution time. Please simplify the pattern.",
+      'REDOS_PATTERN_RISK'
+    );
+  }
+  if (/[+*]{2,}/.test(pattern)) {
+    throw new ProcessorError(
+      "Potential Catastrophic Backtracking (ReDoS) detected: Pattern contains consecutive quantifiers ('++' or '**').",
+      'REDOS_PATTERN_RISK'
+    );
+  }
+
+  if (testString.length > 100000) {
+    throw new ProcessorError('Test string exceeds maximum length of 100,000 characters to prevent excessive processing time.', 'PAYLOAD_TOO_LARGE');
+  }
+
   let regex: RegExp;
   try {
     regex = new RegExp(pattern, flags);

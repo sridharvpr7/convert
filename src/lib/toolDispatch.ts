@@ -442,7 +442,7 @@ const dispatchMap: Record<string, ToolDispatch> = {
       { type: 'password', key: 'password', label: 'Document Password', placeholder: 'Enter password to encrypt PDF', default: '' },
       { type: 'password', key: 'ownerPassword', label: 'Owner Password (optional)', placeholder: 'Leave blank to use document password', default: '' },
     ],
-    optionsHint: 'Applies genuine ISO 32000-1 128-bit encryption to password-protect the PDF.',
+    optionsHint: 'Security Notice: Client-side stream encryption is disabled for security safety (ISO 32000-2 AES-256 requires server QPDF engine).',
   },
 
   'pdf-unlock': {
@@ -450,16 +450,15 @@ const dispatchMap: Record<string, ToolDispatch> = {
     optionFields: [
       { type: 'password', key: 'password', label: 'Current Password', placeholder: 'Enter current document password', default: '' },
     ],
-    optionsHint: 'Removes password protection from encrypted PDFs when provided with valid authorization.',
+    optionsHint: 'Security Notice: Client-side stream decryption is disabled for security safety (requires cryptographic stream engine).',
   },
 
   'pdf-redact': {
     processor: async (files, opts) => (await import('./pdfSecurityTools')).pdfRedact(files[0], opts),
     optionFields: [
       { type: 'text', key: 'searchTerm', label: 'Sensitive Phrase to Redact', placeholder: 'e.g. CONFIDENTIAL or SSN', default: 'CONFIDENTIAL' },
-      { type: 'checkbox', key: 'redactAllPages', label: 'Apply Redaction Band on All Pages', default: false },
     ],
-    optionsHint: 'Permanently masks visual regions and strips sensitive text tokens from content streams.',
+    optionsHint: 'Physically excises matching text operators from content streams and applies permanent visual redaction.',
   },
 
   'pdf-metadata-cleaner': {

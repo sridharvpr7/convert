@@ -73,11 +73,12 @@ export async function csvToExcel(
   options: Record<string, unknown> = {}
 ): Promise<ProcessorResult> {
   const rawText = await file.text();
-  if (!rawText.trim()) {
+  const text = rawText.replace(/^\uFEFF/, '');
+  if (!text.trim()) {
     throw new ProcessorError('The CSV file is empty.', 'EMPTY_DATA');
   }
 
-  const parseResult = Papa.parse<string[]>(rawText, {
+  const parseResult = Papa.parse<string[]>(text, {
     skipEmptyLines: false,
     dynamicTyping: false,
   });
@@ -301,7 +302,8 @@ export async function csvToJson(
   file: File,
   options: Record<string, unknown> = {}
 ): Promise<ProcessorResult> {
-  const text = await file.text();
+  const rawText = await file.text();
+  const text = rawText.replace(/^\uFEFF/, '');
   if (!text.trim()) {
     throw new ProcessorError('The CSV input is empty.', 'EMPTY_DATA');
   }

@@ -1,441 +1,110 @@
 // ============================================================
 // CONVETER — PDF Security Studio Engine
 // Client-side, privacy-preserving PDF security operations:
-// 1. Password Protection (ISO 32000-1 Standard Encryption)
-// 2. Unlock & Decryption
-// 3. Permanent Redaction (Visual + Content Stream token stripping)
-// 4. Metadata Cleaner (Strips /Info & /Metadata XMP)
+// 1. Password Protection (Security-Audited Status & Restrictions)
+// 2. Unlock & Decryption (Security-Audited Status & Restrictions)
+// 3. Permanent Redaction (Physical Content Stream Purge + Masking)
+// 4. Metadata Cleaner (Strips /Info & /Metadata XMP Streams)
 // 5. Security & Structural Vulnerability Inspector
 // ============================================================
 
-import { PDFDocument, PDFName, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFNumber, rgb } from 'pdf-lib';
 import type { ProcessorResult } from './processors.ts';
 import { ProcessorError, toBlobPart } from './processors.ts';
 
-// Standard 32-byte padding string specified in ISO 32000-1 §7.6.3.3
-const PADDING = new Uint8Array([
-  0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41,
-  0x64, 0x00, 0x4e, 0x56, 0xff, 0xfa, 0x01, 0x08,
-  0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80,
-  0x2f, 0x0c, 0xa9, 0xfe, 0x64, 0x53, 0x69, 0x7a,
-]);
-
 // ─────────────────────────────────────────────────────────
-// Cryptographic Helpers (RC4 & MD5)
+// Web Streams Deflate / Inflate Helpers (Standard Browser APIs)
 // ─────────────────────────────────────────────────────────
 
-function rc4(key: Uint8Array, data: Uint8Array): Uint8Array {
-  const s = new Uint8Array(256);
-  for (let i = 0; i < 256; i++) s[i] = i;
-  let j = 0;
-  for (let i = 0; i < 256; i++) {
-    j = (j + s[i] + key[i % key.length]) & 255;
-    const tmp = s[i]; s[i] = s[j]; s[j] = tmp;
+async function decompressStream(bytes: Uint8Array): Promise<Uint8Array> {
+  try {
+    const ds = new DecompressionStream('deflate');
+    const writer = ds.writable.getWriter();
+    writer.write(bytes);
+    writer.close();
+    const reader = ds.readable.getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+    const result = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const c of chunks) {
+      result.set(c, offset);
+      offset += c.length;
+    }
+    return result;
+  } catch {
+    // If not compressed with deflate, return raw bytes
+    return bytes;
   }
-  let i = 0;
-  j = 0;
-  const out = new Uint8Array(data.length);
-  for (let k = 0; k < data.length; k++) {
-    i = (i + 1) & 255;
-    j = (j + s[i]) & 255;
-    const tmp = s[i]; s[i] = s[j]; s[j] = tmp;
-    out[k] = data[k] ^ s[(s[i] + s[j]) & 255];
-  }
-  return out;
 }
 
-function md5Raw(bytes: Uint8Array): Uint8Array {
-  function safeAdd(x: number, y: number): number {
-    const lsw = (x & 0xffff) + (y & 0xffff);
-    const msw = (x >> 16) + (y >> 16) + (lsw >> 16);
-    return (msw << 16) | (lsw & 0xffff);
+async function compressStream(bytes: Uint8Array): Promise<Uint8Array> {
+  const cs = new CompressionStream('deflate');
+  const writer = cs.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  const reader = cs.readable.getReader();
+  const chunks: Uint8Array[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) chunks.push(value);
   }
-  function bitRol(num: number, cnt: number): number {
-    return (num << cnt) | (num >>> (32 - cnt));
+  const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const c of chunks) {
+    result.set(c, offset);
+    offset += c.length;
   }
-  function md5cmn(q: number, a: number, b: number, x: number, s: number, t: number): number {
-    return safeAdd(bitRol(safeAdd(safeAdd(a, q), safeAdd(x, t)), s), b);
-  }
-  function md5ff(a: number, b: number, c: number, d: number, x: number, s: number, t: number): number {
-    return md5cmn((b & c) | (~b & d), a, b, x, s, t);
-  }
-  function md5gg(a: number, b: number, c: number, d: number, x: number, s: number, t: number): number {
-    return md5cmn((b & d) | (c & ~d), a, b, x, s, t);
-  }
-  function md5hh(a: number, b: number, c: number, d: number, x: number, s: number, t: number): number {
-    return md5cmn(b ^ c ^ d, a, b, x, s, t);
-  }
-  function md5ii(a: number, b: number, c: number, d: number, x: number, s: number, t: number): number {
-    return md5cmn(c ^ (b | ~d), a, b, x, s, t);
-  }
-
-  const n = bytes.length;
-  const wordCount = (((n + 8) >> 6) + 1) * 16;
-  const x = new Int32Array(wordCount);
-  for (let i = 0; i < n; i++) {
-    x[i >> 2] |= bytes[i] << ((i % 4) * 8);
-  }
-  x[n >> 2] |= 0x80 << ((n % 4) * 8);
-  x[wordCount - 2] = n * 8;
-
-  let a = 1732584193;
-  let b = -271733879;
-  let c = -1732584194;
-  let d = 271733878;
-
-  for (let i = 0; i < wordCount; i += 16) {
-    const olda = a; const oldb = b; const oldc = c; const oldd = d;
-    a = md5ff(a, b, c, d, x[i], 7, -680876936);
-    d = md5ff(d, a, b, c, x[i + 1], 12, -389564586);
-    c = md5ff(c, d, a, b, x[i + 2], 17, 606105819);
-    b = md5ff(b, c, d, a, x[i + 3], 22, -1044525330);
-    a = md5ff(a, b, c, d, x[i + 4], 7, -176418897);
-    d = md5ff(d, a, b, c, x[i + 5], 12, 1200080426);
-    c = md5ff(c, d, a, b, x[i + 6], 17, -1473231341);
-    b = md5ff(b, c, d, a, x[i + 7], 22, -45705983);
-    a = md5ff(a, b, c, d, x[i + 8], 7, 1770035416);
-    d = md5ff(d, a, b, c, x[i + 9], 12, -1958414417);
-    c = md5ff(c, d, a, b, x[i + 10], 17, -42063);
-    b = md5ff(b, c, d, a, x[i + 11], 22, -1990404162);
-    a = md5ff(a, b, c, d, x[i + 12], 7, 1804603682);
-    d = md5ff(d, a, b, c, x[i + 13], 12, -40341101);
-    c = md5ff(c, d, a, b, x[i + 14], 17, -1502002290);
-    b = md5ff(b, c, d, a, x[i + 15], 22, 1236535329);
-
-    a = md5gg(a, b, c, d, x[i + 1], 5, -165796510);
-    d = md5gg(d, a, b, c, x[i + 6], 9, -1069501632);
-    c = md5gg(c, d, a, b, x[i + 11], 14, 643717713);
-    b = md5gg(b, c, d, a, x[i], 20, -373897302);
-    a = md5gg(a, b, c, d, x[i + 5], 5, -701558691);
-    d = md5gg(d, a, b, c, x[i + 10], 9, 38016083);
-    c = md5gg(c, d, a, b, x[i + 15], 14, -660478335);
-    b = md5gg(b, c, d, a, x[i + 4], 20, -405537848);
-    a = md5gg(a, b, c, d, x[i + 9], 5, 568446438);
-    d = md5gg(d, a, b, c, x[i + 14], 9, -1019803690);
-    c = md5gg(c, d, a, b, x[i + 3], 14, -187363961);
-    b = md5gg(b, c, d, a, x[i + 8], 20, 1163531501);
-    a = md5gg(a, b, c, d, x[i + 13], 5, -1444681467);
-    d = md5gg(d, a, b, c, x[i + 2], 9, -51403784);
-    c = md5gg(c, d, a, b, x[i + 7], 14, 1735328473);
-    b = md5gg(b, c, d, a, x[i + 12], 20, -1926607734);
-
-    a = md5hh(a, b, c, d, x[i + 5], 4, -378558);
-    d = md5hh(d, a, b, c, x[i + 8], 11, -2022574463);
-    c = md5hh(c, d, a, b, x[i + 11], 16, 1839030562);
-    b = md5hh(b, c, d, a, x[i + 14], 23, -35309556);
-    a = md5hh(a, b, c, d, x[i + 1], 4, -1530992060);
-    d = md5hh(d, a, b, c, x[i + 4], 11, 1272893353);
-    c = md5hh(c, d, a, b, x[i + 7], 16, -155497632);
-    b = md5hh(b, c, d, a, x[i + 10], 23, -1094730640);
-    a = md5hh(a, b, c, d, x[i + 13], 4, 681279174);
-    d = md5hh(d, a, b, c, x[i], 11, -358537222);
-    c = md5hh(c, d, a, b, x[i + 3], 16, -722521979);
-    b = md5hh(b, c, d, a, x[i + 6], 23, 76029189);
-    a = md5hh(a, b, c, d, x[i + 9], 4, -640364487);
-    d = md5hh(d, a, b, c, x[i + 12], 11, -421815835);
-    c = md5hh(c, d, a, b, x[i + 15], 16, 530742520);
-    b = md5hh(b, c, d, a, x[i + 2], 23, -995338651);
-
-    a = md5ii(a, b, c, d, x[i], 6, -198630844);
-    d = md5ii(d, a, b, c, x[i + 7], 10, 1126891415);
-    c = md5ii(c, d, a, b, x[i + 14], 15, -1416354905);
-    b = md5ii(b, c, d, a, x[i + 5], 21, -57434055);
-    a = md5ii(a, b, c, d, x[i + 12], 6, 1700485571);
-    d = md5ii(d, a, b, c, x[i + 3], 10, -1894986606);
-    c = md5ii(c, d, a, b, x[i + 10], 15, -1051523);
-    b = md5ii(b, c, d, a, x[i + 1], 21, -2054922799);
-    a = md5ii(a, b, c, d, x[i + 8], 6, 1873313359);
-    d = md5ii(d, a, b, c, x[i + 15], 10, -30611744);
-    c = md5ii(c, d, a, b, x[i + 6], 15, -1560198380);
-    b = md5ii(b, c, d, a, x[i + 13], 21, 1309151649);
-    a = md5ii(a, b, c, d, x[i + 4], 6, -145523070);
-    d = md5ii(d, a, b, c, x[i + 11], 10, -1120210379);
-    c = md5ii(c, d, a, b, x[i + 2], 15, 718787259);
-    b = md5ii(b, c, d, a, x[i + 9], 21, -343485551);
-
-    a = safeAdd(a, olda);
-    b = safeAdd(b, oldb);
-    c = safeAdd(c, oldc);
-    d = safeAdd(d, oldd);
-  }
-
-  const out = new Uint8Array(16);
-  for (let idx = 0; idx < 4; idx++) {
-    const w = idx === 0 ? a : idx === 1 ? b : idx === 2 ? c : d;
-    out[idx * 4] = w & 0xff;
-    out[idx * 4 + 1] = (w >> 8) & 0xff;
-    out[idx * 4 + 2] = (w >> 16) & 0xff;
-    out[idx * 4 + 3] = (w >> 24) & 0xff;
-  }
-  return out;
-}
-
-function padPassword(pwd: string): Uint8Array {
-  const enc = new TextEncoder().encode(pwd);
-  const out = new Uint8Array(32);
-  if (enc.length >= 32) {
-    out.set(enc.subarray(0, 32));
-  } else {
-    out.set(enc);
-    out.set(PADDING.subarray(0, 32 - enc.length), enc.length);
-  }
-  return out;
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return result;
 }
 
 // ─────────────────────────────────────────────────────────
-// 1. PDF Password Protection (Genuine ISO 32000-1 Encryption)
+// 1. PDF Password Protection (Safety Notice / Server Requirement)
 // ─────────────────────────────────────────────────────────
 export async function pdfPasswordProtect(
-  file: File,
-  options: Record<string, unknown> = {}
+  _file: File,
+  _options: Record<string, unknown> = {}
 ): Promise<ProcessorResult> {
-  const userPassword = (options.password as string) || (options.userPassword as string) || '';
-  if (!userPassword) {
-    throw new ProcessorError('Please provide a password to protect the PDF document.', 'EMPTY_PASSWORD');
-  }
-
-  const ownerPassword = (options.ownerPassword as string) || userPassword;
-  const permissionsInt = -3904; // Standard permissions: allows printing & copy for owner
-
-  const arrayBuffer = await file.arrayBuffer();
-  // Ensure the PDF is not already encrypted
-  let pdfDoc: PDFDocument;
-  try {
-    pdfDoc = await PDFDocument.load(arrayBuffer);
-  } catch (err: unknown) {
-    const msg = (err as Error)?.message || '';
-    if (msg.includes('encrypt') || msg.includes('password')) {
-      throw new ProcessorError('This PDF document is already encrypted or password-protected.', 'ALREADY_ENCRYPTED');
-    }
-    throw new ProcessorError(`Could not load PDF: ${msg}`, 'INVALID_PDF');
-  }
-
-  // Generate Document ID (16 bytes)
-  const docIdBytes = new Uint8Array(16);
-  crypto.getRandomValues(docIdBytes);
-
-  // Derive /O String (Algorithm 3)
-  const paddedOwner = padPassword(ownerPassword);
-  let hash = md5Raw(paddedOwner);
-  // Repeat MD5 50 times
-  for (let k = 0; k < 50; k++) {
-    hash = md5Raw(hash);
-  }
-  const key128 = hash.subarray(0, 16);
-  const paddedUser = padPassword(userPassword);
-  let oString = rc4(key128, paddedUser);
-  for (let k = 1; k <= 19; k++) {
-    const kKey = new Uint8Array(key128.length);
-    for (let b = 0; b < key128.length; b++) kKey[b] = key128[b] ^ k;
-    oString = rc4(kKey, oString);
-  }
-
-  // Derive File Encryption Key (Algorithm 2)
-  const pBytes = new Uint8Array([
-    permissionsInt & 0xff,
-    (permissionsInt >> 8) & 0xff,
-    (permissionsInt >> 16) & 0xff,
-    (permissionsInt >> 24) & 0xff,
-  ]);
-  const concatBuf = new Uint8Array(32 + 32 + 4 + 16);
-  concatBuf.set(paddedUser, 0);
-  concatBuf.set(oString, 32);
-  concatBuf.set(pBytes, 64);
-  concatBuf.set(docIdBytes, 68);
-
-  let fileKeyHash = md5Raw(concatBuf);
-  for (let k = 0; k < 50; k++) {
-    fileKeyHash = md5Raw(fileKeyHash.subarray(0, 16));
-  }
-  const fileKey = fileKeyHash.subarray(0, 16);
-
-  // Derive /U String (Algorithm 4)
-  let uString = rc4(fileKey, PADDING);
-  for (let k = 1; k <= 19; k++) {
-    const kKey = new Uint8Array(fileKey.length);
-    for (let b = 0; b < fileKey.length; b++) kKey[b] = fileKey[b] ^ k;
-    uString = rc4(kKey, uString);
-  }
-
-  // Save base PDF unencrypted from pdf-lib
-  const unencryptedBytes = await pdfDoc.save({ useObjectStreams: false });
-
-  // In the raw PDF stream, inject the standard /Encrypt dictionary and encrypt object streams
-  const decoder = new TextDecoder('latin1');
-  const encoder = new TextEncoder();
-  const rawString = decoder.decode(unencryptedBytes);
-
-  // Construct standard encryption dictionary
-  const encryptDict = [
-    `<<`,
-    `/Filter /Standard`,
-    `/V 2`,
-    `/R 3`,
-    `/Length 128`,
-    `/P ${permissionsInt}`,
-    `/O <${bytesToHex(oString)}>`,
-    `/U <${bytesToHex(uString)}>`,
-    `>>`,
-  ].join(' ');
-
-  // Inject into trailer
-  const trailerIdx = rawString.lastIndexOf('trailer');
-  if (trailerIdx === -1) {
-    throw new ProcessorError('Invalid PDF structure: trailer dictionary not found.', 'MALFORMED_PDF');
-  }
-
-  // We assign a new object number for the /Encrypt dictionary
-  const maxObjMatch = rawString.match(/(\d+)\s+0\s+obj/g);
-  let nextObjNum = 9999;
-  if (maxObjMatch) {
-    const objNums = maxObjMatch.map((m) => parseInt(m, 10));
-    nextObjNum = Math.max(...objNums) + 1;
-  }
-
-  const encryptObj = `\n${nextObjNum} 0 obj\n${encryptDict}\nendobj\n`;
-  const insertPos = rawString.lastIndexOf('xref');
-  const targetPos = insertPos !== -1 ? insertPos : trailerIdx;
-
-  let modifiedString = rawString.slice(0, targetPos) + encryptObj + rawString.slice(targetPos);
-  // Add /Encrypt and /ID in trailer
-  modifiedString = modifiedString.replace(
-    /trailer\s*<<([^>]*)>>/i,
-    `trailer <<$1 /Encrypt ${nextObjNum} 0 R /ID [ <${bytesToHex(docIdBytes)}> <${bytesToHex(docIdBytes)}> ] >>`
+  // Genuine PDF password protection requires full ISO 32000-2 (AES-256) object and stream encryption.
+  // Pure client-side browser libraries cannot encrypt PDF object streams during serialization.
+  // Faking encryption by injecting trailer flags without encrypting streams creates corrupted or insecure PDFs.
+  throw new ProcessorError(
+    'PDF Password Protection requires full ISO 32000-2 AES-256 object stream encryption. Client-side browser PDF serialization does not support cryptographic stream encryption. To protect your document integrity and prevent generating pseudo-encrypted files, this operation requires an audited server-side engine (such as QPDF).',
+    'ENCRYPTION_ENGINE_UNAVAILABLE'
   );
-
-  const finalBytes = encoder.encode(modifiedString);
-  const blob = new Blob([toBlobPart(finalBytes)], { type: 'application/pdf' });
-  const baseName = file.name.replace(/\.pdf$/i, '') || 'document';
-
-  return {
-    blob,
-    filename: `${baseName}_protected.pdf`,
-    mimeType: 'application/pdf',
-    meta: {
-      encrypted: 'true',
-      encryptionLevel: 'Standard 128-bit RC4 (ISO 32000-1)',
-      pages: pdfDoc.getPageCount(),
-      outputSize: blob.size,
-    },
-  };
 }
 
 // ─────────────────────────────────────────────────────────
-// 2. PDF Unlock (Decrypt Genuine Password-Protected PDF)
+// 2. PDF Unlock (Safety Notice / Server Requirement)
 // ─────────────────────────────────────────────────────────
 export async function pdfUnlock(
-  file: File,
-  options: Record<string, unknown> = {}
+  _file: File,
+  _options: Record<string, unknown> = {}
 ): Promise<ProcessorResult> {
-  const password = (options.password as string) || '';
-  if (!password) {
-    throw new ProcessorError('Please provide the document password to unlock.', 'EMPTY_PASSWORD');
-  }
-
-  const arrayBuffer = await file.arrayBuffer();
-  const rawBytes = new Uint8Array(arrayBuffer);
-  const rawStr = new TextDecoder('latin1').decode(rawBytes);
-
-  if (!rawStr.includes('/Encrypt')) {
-    throw new ProcessorError('This PDF document is not password-protected.', 'NOT_ENCRYPTED');
-  }
-
-  // Parse encryption dictionary to verify password
-  const oMatch = rawStr.match(/\/O\s*<([0-9a-fA-F]{64})>/);
-  const uMatch = rawStr.match(/\/U\s*<([0-9a-fA-F]{64})>/);
-  const pMatch = rawStr.match(/\/P\s+(-?\d+)/);
-  const idMatch = rawStr.match(/\/ID\s*\[\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/);
-
-  if (oMatch && uMatch && pMatch && idMatch) {
-    const oHex = oMatch[1];
-    const uHex = uMatch[1];
-    const pInt = parseInt(pMatch[1], 10);
-    const idHex = idMatch[1];
-
-    const oBytes = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) oBytes[i] = parseInt(oHex.substr(i * 2, 2), 16);
-
-    const uBytes = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) uBytes[i] = parseInt(uHex.substr(i * 2, 2), 16);
-
-    const docIdBytes = new Uint8Array(16);
-    for (let i = 0; i < 16; i++) docIdBytes[i] = parseInt(idHex.substr(i * 2, 2), 16);
-
-    // Verify User Password against Algorithm 4
-    const paddedUser = padPassword(password);
-    const pBytes = new Uint8Array([
-      pInt & 0xff,
-      (pInt >> 8) & 0xff,
-      (pInt >> 16) & 0xff,
-      (pInt >> 24) & 0xff,
-    ]);
-    const concatBuf = new Uint8Array(32 + 32 + 4 + 16);
-    concatBuf.set(paddedUser, 0);
-    concatBuf.set(oBytes, 32);
-    concatBuf.set(pBytes, 64);
-    concatBuf.set(docIdBytes, 68);
-
-    let fileKeyHash = md5Raw(concatBuf);
-    for (let k = 0; k < 50; k++) {
-      fileKeyHash = md5Raw(fileKeyHash.subarray(0, 16));
-    }
-    const fileKey = fileKeyHash.subarray(0, 16);
-
-    let expectedU = rc4(fileKey, PADDING);
-    for (let k = 1; k <= 19; k++) {
-      const kKey = new Uint8Array(fileKey.length);
-      for (let b = 0; b < fileKey.length; b++) kKey[b] = fileKey[b] ^ k;
-      expectedU = rc4(kKey, expectedU);
-    }
-
-    // Check first 16 bytes match
-    let matches = true;
-    for (let b = 0; b < 16; b++) {
-      if (expectedU[b] !== uBytes[b]) {
-        matches = false;
-        break;
-      }
-    }
-
-    if (!matches) {
-      throw new ProcessorError('Incorrect password. The document could not be unlocked.', 'INCORRECT_PASSWORD');
-    }
-  }
-
-  // Remove /Encrypt dictionary and strip encryption references
-  let unlockedStr = rawStr.replace(/\/Encrypt\s+\d+\s+\d+\s+R/gi, '');
-  unlockedStr = unlockedStr.replace(/<<[^>]*\/Filter\s*\/Standard[^>]*>>/gi, '<<>>');
-
-  const encoder = new TextEncoder();
-  const unlockedBytes = encoder.encode(unlockedStr);
-  const blob = new Blob([toBlobPart(unlockedBytes)], { type: 'application/pdf' });
-  const baseName = file.name.replace(/(_protected|_encrypted)?\.pdf$/i, '') || 'document';
-
-  return {
-    blob,
-    filename: `${baseName}_unlocked.pdf`,
-    mimeType: 'application/pdf',
-    meta: {
-      unlocked: 'true',
-      originalSize: file.size,
-      outputSize: blob.size,
-    },
-  };
+  // Truly encrypted PDFs contain encrypted stream objects.
+  // Simply stripping the /Encrypt dictionary leaves ciphertext streams which fail to render.
+  throw new ProcessorError(
+    'PDF Document Unlocking requires full cryptographic stream decryption (AES-256 / Standard Decryption). Removing the /Encrypt catalog dictionary alone leaves underlying stream objects encrypted as ciphertext. To prevent document corruption, a full cryptographic decryption engine is required.',
+    'DECRYPTION_ENGINE_UNAVAILABLE'
+  );
 }
 
 // ─────────────────────────────────────────────────────────
-// 3. PDF Redaction (Permanent Visual + Content Stream Redaction)
+// 3. PDF Redaction (Physical Stream Token Purge + Visual Mask)
 // ─────────────────────────────────────────────────────────
 export async function pdfRedact(
   file: File,
   options: Record<string, unknown> = {}
 ): Promise<ProcessorResult> {
-  const targetTerm = (options.searchTerm as string) || (options.text as string) || '';
-  if (!targetTerm.trim()) {
+  const targetTerm = ((options.searchTerm as string) || (options.text as string) || '').trim();
+  if (!targetTerm) {
     throw new ProcessorError('Please specify the sensitive text phrase or keywords to redact.', 'EMPTY_SEARCH_TERM');
   }
 
@@ -450,77 +119,78 @@ export async function pdfRedact(
   const pages = pdfDoc.getPages();
   let redactedOccurrences = 0;
   const pagesAffected = new Set<number>();
-  const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
-  // Redaction box styling
   const boxColor = rgb(0, 0, 0); // Solid black redaction box
 
-  // Search each page's text streams
-  const termLower = targetTerm.toLowerCase();
+  // Target encodings: literal text and uppercase hexadecimal string
+  const targetLatin = targetTerm;
+  const targetHex = Array.from(new TextEncoder().encode(targetTerm))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase();
+
+  const latinReplacement = ' '.repeat(targetTerm.length);
+  const hexReplacement = '20'.repeat(targetTerm.length);
+
   for (let idx = 0; idx < pages.length; idx++) {
     const page = pages[idx];
     const { width, height } = page.getSize();
-
-    // Check if page contains the target text term by inspecting its text content
     const contents = page.node.Contents();
-    let pageHasMatch = false;
+    if (!contents) continue;
 
-    if (contents) {
-      const streamList = (contents as any).asArray ? (contents as any).asArray() : [contents];
-      for (const s of streamList) {
-        const stream = pdfDoc.context.lookup(s) as { getContents?: () => Uint8Array };
-        if (stream && typeof stream.getContents === 'function') {
-          const rawStreamText = new TextDecoder('latin1').decode(stream.getContents());
-          if (rawStreamText.toLowerCase().includes(termLower)) {
-            pageHasMatch = true;
-            redactedOccurrences++;
-            pagesAffected.add(idx + 1);
-          }
-        }
+    const streamList = (contents as any).asArray ? (contents as any).asArray() : [contents];
+    let pageModified = false;
+
+    for (const s of streamList) {
+      const streamObj = pdfDoc.context.lookup(s) as unknown as { contents: Uint8Array; dict: any };
+      if (!streamObj || !streamObj.contents) continue;
+
+      const decompressedBytes = await decompressStream(streamObj.contents);
+      let streamStr = new TextDecoder('latin1').decode(decompressedBytes);
+      let streamChanged = false;
+
+      // 1. Purge matching hexadecimal text operators: <HEX...>
+      if (streamStr.includes(targetHex)) {
+        const matchesCount = (streamStr.split(targetHex).length - 1);
+        streamStr = streamStr.split(targetHex).join(hexReplacement);
+        redactedOccurrences += matchesCount;
+        streamChanged = true;
+      }
+
+      // 2. Purge matching literal text operators: (TEXT...)
+      if (streamStr.includes(targetLatin)) {
+        const matchesCount = (streamStr.split(targetLatin).length - 1);
+        streamStr = streamStr.split(targetLatin).join(latinReplacement);
+        redactedOccurrences += matchesCount;
+        streamChanged = true;
+      }
+
+      if (streamChanged) {
+        pageModified = true;
+        const recompressed = await compressStream(new TextEncoder().encode(streamStr));
+        streamObj.contents = recompressed;
+        (streamObj.dict as any).set(PDFName.of('Length'), PDFNumber.of(recompressed.length));
       }
     }
 
-    // Apply permanent visual redaction mask
-    if (pageHasMatch || options.redactAllPages === true) {
-      // Draw solid redaction band in middle/header where sensitive notice appears
+    if (pageModified) {
+      pagesAffected.add(idx + 1);
+      // Draw opaque permanent black redaction box on the page
       page.drawRectangle({
-        x: 50,
-        y: height - 120,
-        width: Math.min(width - 100, targetTerm.length * 14 + 40),
+        x: 40,
+        y: Math.max(20, height - 120),
+        width: Math.min(width - 80, targetTerm.length * 12 + 40),
         height: 24,
         color: boxColor,
-      });
-
-      page.drawText('[REDACTED]', {
-        x: 55,
-        y: height - 114,
-        size: 10,
-        font,
-        color: rgb(1, 1, 1),
       });
     }
   }
 
+  // If term was not found anywhere in the content streams, DO NOT return fake success
   if (redactedOccurrences === 0) {
-    // If not found in raw streams, apply safe redaction box on first page
-    const firstPage = pages[0];
-    const { height } = firstPage.getSize();
-    firstPage.drawRectangle({
-      x: 50,
-      y: height - 100,
-      width: Math.max(120, targetTerm.length * 10),
-      height: 22,
-      color: boxColor,
-    });
-    firstPage.drawText('[REDACTED]', {
-      x: 55,
-      y: height - 95,
-      size: 9,
-      font,
-      color: rgb(1, 1, 1),
-    });
-    redactedOccurrences = 1;
-    pagesAffected.add(1);
+    throw new ProcessorError(
+      `The search term "${targetTerm}" was not found in any searchable text streams in this PDF. No content was modified. Note: Redaction cannot process flattened bitmap images containing rasterized text.`,
+      'PHRASE_NOT_FOUND'
+    );
   }
 
   const modifiedBytes = await pdfDoc.save({ useObjectStreams: true });
@@ -567,7 +237,7 @@ export async function pdfMetadataCleaner(
     modificationDate: pdfDoc.getModificationDate() ? pdfDoc.getModificationDate()?.toISOString() : '(none)',
   };
 
-  // Strip all standard document metadata
+  // 1. Purge all standard document metadata properties
   pdfDoc.setTitle('');
   pdfDoc.setAuthor('');
   pdfDoc.setSubject('');
@@ -575,7 +245,18 @@ export async function pdfMetadataCleaner(
   pdfDoc.setCreator('');
   pdfDoc.setProducer('');
 
-  // Delete XMP XML metadata stream if present in catalog
+  // 2. Delete all keys from the Info dictionary in trailer context
+  const infoRef = pdfDoc.context.trailerInfo?.Info;
+  if (infoRef) {
+    const infoDict = pdfDoc.context.lookup(infoRef) as any;
+    if (infoDict && typeof infoDict.entries === 'function') {
+      for (const [k] of infoDict.entries()) {
+        infoDict.delete(k);
+      }
+    }
+  }
+
+  // 3. Delete XMP XML metadata stream if present in catalog
   const catalog = pdfDoc.catalog;
   if (catalog.has(PDFName.of('Metadata'))) {
     catalog.delete(PDFName.of('Metadata'));
@@ -624,7 +305,6 @@ export async function pdfSecurityInspector(
     pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
     pageCount = pdfDoc.getPageCount();
   } catch {
-    // If encrypted or malformed, extract what we can from header
     const match = rawStr.match(/\/Count\s+(\d+)/);
     pageCount = match ? parseInt(match[1], 10) : 0;
   }
@@ -669,7 +349,7 @@ export async function pdfSecurityInspector(
     ``,
     `1. ENCRYPTION & ACCESS CONTROL:`,
     `- Password Encrypted: ${isEncrypted ? 'YES (Access Protected)' : 'NO (Unencrypted / Public)'}`,
-    `- Digital Signatures: ${hasSignatures ? 'YES (Signed Document)' : 'NO'}`,
+    `- Digital Signatures Detected: ${hasSignatures ? 'YES (/Sig detected — note: signature validity requires public key cert verification)' : 'NO'}`,
     ``,
     `2. STRUCTURAL THREAT INSPECTION:`,
     `- Embedded JavaScript (/JS): ${hasJS ? 'DETECTED ⚠️' : 'CLEAN ✅'}`,
@@ -707,4 +387,3 @@ export async function pdfSecurityInspector(
     },
   };
 }
-
