@@ -8,7 +8,7 @@
 // 5. Security & Structural Vulnerability Inspector
 // ============================================================
 
-import { PDFDocument, PDFName, PDFNumber, rgb } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFNumber } from 'pdf-lib';
 import type { ProcessorResult } from './processors.ts';
 import { ProcessorError, toBlobPart } from './processors.ts';
 
@@ -66,15 +66,74 @@ async function compressStream(bytes: Uint8Array): Promise<Uint8Array> {
 }
 
 // ─────────────────────────────────────────────────────────
-// 1. PDF Password Protection (Safety Notice / Server Requirement)
+// 1. PDF Password Protection (QPDF Cryptographic Integration)
 // ─────────────────────────────────────────────────────────
 export async function pdfPasswordProtect(
-  _file: File,
-  _options: Record<string, unknown> = {}
+  file: File,
+  options: Record<string, unknown> = {}
 ): Promise<ProcessorResult> {
-  // Genuine PDF password protection requires full ISO 32000-2 (AES-256) object and stream encryption.
-  // Pure client-side browser libraries cannot encrypt PDF object streams during serialization.
-  // Faking encryption by injecting trailer flags without encrypting streams creates corrupted or insecure PDFs.
+  const password = ((options.password as string) || (options.userPassword as string) || '').trim();
+  if (!password) {
+    throw new ProcessorError('Please enter a password to encrypt the document.', 'EMPTY_PASSWORD');
+  }
+  const ownerPassword = ((options.ownerPassword as string) || password).trim();
+
+  // 1. Attempt genuine server-side QPDF AES-256 stream encryption
+  if (typeof fetch !== 'undefined') {
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const fileBase64 = btoa(binary);
+
+      const response = await fetch('/api/pdf/encrypt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileBase64,
+          userPassword: password,
+          ownerPassword,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.fileBase64) {
+          const binStr = atob(data.fileBase64);
+          const outBytes = new Uint8Array(binStr.length);
+          for (let i = 0; i < binStr.length; i++) outBytes[i] = binStr.charCodeAt(i);
+          const blob = new Blob([toBlobPart(outBytes)], { type: 'application/pdf' });
+          const baseName = file.name.replace(/\.pdf$/i, '') || 'document';
+          return {
+            blob,
+            filename: `${baseName}_encrypted.pdf`,
+            mimeType: 'application/pdf',
+            meta: {
+              encryptionStandard: 'ISO 32000-2 AES-256 (Genuine QPDF Engine)',
+              keyLength: 256,
+              outputSize: blob.size,
+            },
+          };
+        }
+      }
+
+      if (response.status === 501) {
+        const errJson = await response.json().catch(() => ({}));
+        throw new ProcessorError(
+          errJson.message || 'QPDF cryptographic engine is not installed on the server host. Client-side browser serialization cannot generate standard ISO 32000-2 AES-256 encrypted streams without corrupting the PDF structure.',
+          'ENCRYPTION_ENGINE_UNAVAILABLE'
+        );
+      }
+    } catch (err: any) {
+      if (err instanceof ProcessorError) throw err;
+      // Network failure or offline mode: fall through to honest safety guard
+    }
+  }
+
+  // Pure client-side safety guard: refuse to emit pseudo-encrypted PDFs
   throw new ProcessorError(
     'PDF Password Protection requires full ISO 32000-2 AES-256 object stream encryption. Client-side browser PDF serialization does not support cryptographic stream encryption. To protect your document integrity and prevent generating pseudo-encrypted files, this operation requires an audited server-side engine (such as QPDF).',
     'ENCRYPTION_ENGINE_UNAVAILABLE'
@@ -82,12 +141,74 @@ export async function pdfPasswordProtect(
 }
 
 // ─────────────────────────────────────────────────────────
-// 2. PDF Unlock (Safety Notice / Server Requirement)
+// 2. PDF Unlock (QPDF Cryptographic Integration)
 // ─────────────────────────────────────────────────────────
 export async function pdfUnlock(
-  _file: File,
-  _options: Record<string, unknown> = {}
+  file: File,
+  options: Record<string, unknown> = {}
 ): Promise<ProcessorResult> {
+  const password = ((options.password as string) || '').trim();
+  if (!password) {
+    throw new ProcessorError('Please enter the current document password to unlock.', 'EMPTY_PASSWORD');
+  }
+
+  // 1. Attempt genuine server-side QPDF authenticated decryption
+  if (typeof fetch !== 'undefined') {
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const fileBase64 = btoa(binary);
+
+      const response = await fetch('/api/pdf/decrypt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileBase64,
+          password,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.fileBase64) {
+          const binStr = atob(data.fileBase64);
+          const outBytes = new Uint8Array(binStr.length);
+          for (let i = 0; i < binStr.length; i++) outBytes[i] = binStr.charCodeAt(i);
+          const blob = new Blob([toBlobPart(outBytes)], { type: 'application/pdf' });
+          const baseName = file.name.replace(/\.pdf$/i, '') || 'document';
+          return {
+            blob,
+            filename: `${baseName}_unlocked.pdf`,
+            mimeType: 'application/pdf',
+            meta: {
+              decrypted: 'true',
+              engine: 'QPDF Cryptographic Engine',
+              outputSize: blob.size,
+            },
+          };
+        }
+      }
+
+      if (response.status === 401) {
+        throw new ProcessorError('Decryption failed: Incorrect password provided for this encrypted PDF.', 'INVALID_PASSWORD');
+      }
+
+      if (response.status === 501) {
+        const errJson = await response.json().catch(() => ({}));
+        throw new ProcessorError(
+          errJson.message || 'QPDF cryptographic engine is not installed on the server host.',
+          'DECRYPTION_ENGINE_UNAVAILABLE'
+        );
+      }
+    } catch (err: any) {
+      if (err instanceof ProcessorError) throw err;
+    }
+  }
+
   // Truly encrypted PDFs contain encrypted stream objects.
   // Simply stripping the /Encrypt dictionary leaves ciphertext streams which fail to render.
   throw new ProcessorError(
@@ -97,7 +218,7 @@ export async function pdfUnlock(
 }
 
 // ─────────────────────────────────────────────────────────
-// 3. PDF Redaction (Physical Stream Token Purge + Visual Mask)
+// 3. PDF Redaction (Underlying Stream Token Purge & Residual Content Audit)
 // ─────────────────────────────────────────────────────────
 export async function pdfRedact(
   file: File,
@@ -119,7 +240,6 @@ export async function pdfRedact(
   const pages = pdfDoc.getPages();
   let redactedOccurrences = 0;
   const pagesAffected = new Set<number>();
-  const boxColor = rgb(0, 0, 0); // Solid black redaction box
 
   // Target encodings: literal text and uppercase hexadecimal string
   const targetLatin = targetTerm;
@@ -133,7 +253,6 @@ export async function pdfRedact(
 
   for (let idx = 0; idx < pages.length; idx++) {
     const page = pages[idx];
-    const { width, height } = page.getSize();
     const contents = page.node.Contents();
     if (!contents) continue;
 
@@ -166,7 +285,12 @@ export async function pdfRedact(
 
       if (streamChanged) {
         pageModified = true;
-        const recompressed = await compressStream(new TextEncoder().encode(streamStr));
+        // Preserve 1:1 byte values without UTF-8 re-encoding corruption
+        const streamBytes = new Uint8Array(streamStr.length);
+        for (let i = 0; i < streamStr.length; i++) {
+          streamBytes[i] = streamStr.charCodeAt(i) & 0xff;
+        }
+        const recompressed = await compressStream(streamBytes);
         streamObj.contents = recompressed;
         (streamObj.dict as any).set(PDFName.of('Length'), PDFNumber.of(recompressed.length));
       }
@@ -179,11 +303,14 @@ export async function pdfRedact(
       for (const aRef of annotList) {
         const annotObj = pdfDoc.context.lookup(aRef) as any;
         if (annotObj && annotObj.dict) {
-          const contentsEntry = annotObj.dict.get(PDFName.of('Contents'));
-          if (contentsEntry && typeof contentsEntry.value === 'string' && contentsEntry.value.includes(targetTerm)) {
-            annotObj.dict.delete(PDFName.of('Contents'));
-            redactedOccurrences++;
-            pageModified = true;
+          // Check /Contents, /Subj, /RC, and /TU entries
+          for (const key of ['Contents', 'Subj', 'RC', 'TU']) {
+            const entry = annotObj.dict.get(PDFName.of(key));
+            if (entry && typeof entry.value === 'string' && entry.value.includes(targetTerm)) {
+              annotObj.dict.delete(PDFName.of(key));
+              redactedOccurrences++;
+              pageModified = true;
+            }
           }
         }
       }
@@ -191,14 +318,6 @@ export async function pdfRedact(
 
     if (pageModified) {
       pagesAffected.add(idx + 1);
-      // Draw opaque permanent black redaction box on the page
-      page.drawRectangle({
-        x: 40,
-        y: Math.max(20, height - 120),
-        width: Math.min(width - 80, targetTerm.length * 12 + 40),
-        height: 24,
-        color: boxColor,
-      });
     }
   }
 
@@ -224,19 +343,48 @@ export async function pdfRedact(
   }
 
   // 5. Purge sensitive phrase from document metadata
-  if (pdfDoc.getTitle()?.includes(targetTerm)) pdfDoc.setTitle('');
-  if (pdfDoc.getAuthor()?.includes(targetTerm)) pdfDoc.setAuthor('');
-  if (pdfDoc.getSubject()?.includes(targetTerm)) pdfDoc.setSubject('');
+  if (pdfDoc.getTitle()?.includes(targetTerm)) { pdfDoc.setTitle(''); redactedOccurrences++; }
+  if (pdfDoc.getAuthor()?.includes(targetTerm)) { pdfDoc.setAuthor(''); redactedOccurrences++; }
+  if (pdfDoc.getSubject()?.includes(targetTerm)) { pdfDoc.setSubject(''); redactedOccurrences++; }
+  if (pdfDoc.getCreator()?.includes(targetTerm)) { pdfDoc.setCreator(''); redactedOccurrences++; }
+  if (pdfDoc.getProducer()?.includes(targetTerm)) { pdfDoc.setProducer(''); redactedOccurrences++; }
+
+  // 6. Purge from EmbeddedFiles names if present
+  try {
+    const names = pdfDoc.catalog.get(PDFName.of('Names')) as any;
+    if (names) {
+      const efRef = names.get(PDFName.of('EmbeddedFiles'));
+      if (efRef) {
+        const efDict = pdfDoc.context.lookup(efRef) as any;
+        if (efDict && efDict.toString().includes(targetTerm)) {
+          pdfDoc.catalog.delete(PDFName.of('Names'));
+          redactedOccurrences++;
+        }
+      }
+    }
+  } catch {
+    /* names tree not present */
+  }
 
   // If term was not found anywhere in the content streams, DO NOT return fake success
   if (redactedOccurrences === 0) {
     throw new ProcessorError(
-      `The search term "${targetTerm}" was not found in any searchable text streams in this PDF. No content was modified. Note: Redaction cannot process flattened bitmap images containing rasterized text.`,
+      `The search term "${targetTerm}" was not found in any searchable text streams, annotations, form fields, or metadata in this PDF. No content was modified. Note: Redaction cannot process flattened bitmap images containing rasterized text without optical character recognition (OCR).`,
       'PHRASE_NOT_FOUND'
     );
   }
 
   const modifiedBytes = await pdfDoc.save({ useObjectStreams: true });
+
+  // 7. Residual Content Verification: Ensure sensitive phrase does not remain in output bytes
+  const verificationStr = new TextDecoder('latin1').decode(modifiedBytes);
+  if (verificationStr.includes(targetTerm) || (targetHex.length >= 6 && verificationStr.includes(targetHex))) {
+    throw new ProcessorError(
+      `Security Audit Failed: Residual occurrences of "${targetTerm}" were detected in output bytes (possibly due to custom font subset encodings or encrypted embedded streams). Operation aborted to prevent unintended data leakage.`,
+      'RESIDUAL_CONTENT_DETECTED'
+    );
+  }
+
   const blob = new Blob([toBlobPart(modifiedBytes)], { type: 'application/pdf' });
   const baseName = file.name.replace(/\.pdf$/i, '') || 'document';
 
@@ -248,6 +396,8 @@ export async function pdfRedact(
       redactedOccurrences,
       pagesRedacted: pagesAffected.size,
       targetTerm,
+      residualAudit: 'PASSED (0 residual occurrences detected)',
+      notice: 'Text purged at binary stream level. No misleading arbitrary visual boxes drawn.',
       outputSize: blob.size,
     },
   };
@@ -356,60 +506,63 @@ export async function pdfSecurityInspector(
   const versionMatch = rawStr.match(/%PDF-(\d+\.\d+)/);
   const pdfVersion = versionMatch ? versionMatch[1] : '1.4';
 
-  // Calculate Security Posture Score
-  let securityScore = 100;
-  const detectedRisks: string[] = [];
+  // Categorize Confirmed Findings vs Suspicious Indicators
+  const confirmedAttributes: string[] = [
+    `PDF Version: %PDF-${pdfVersion}`,
+    `Total Page Count: ${pageCount}`,
+    `Encryption Status: ${isEncrypted ? 'Password Protected (/Encrypt dictionary present)' : 'Unencrypted (Standard public access)'}`,
+    `Digital Signatures: ${hasSignatures ? 'Present (/Sig /ByteRange detected)' : 'None'}`,
+    `Interactive Form Fields: ${hasAcroForm ? 'Present (/AcroForm)' : 'None'}`,
+    `Document Metadata Title: ${pdfDoc?.getTitle() || '(none)'}`,
+    `Document Metadata Author: ${pdfDoc?.getAuthor() || '(none)'}`,
+  ];
 
+  const suspiciousIndicators: string[] = [];
   if (hasJS) {
-    securityScore -= 30;
-    detectedRisks.push('CRITICAL: Document contains embedded JavaScript actions (/JavaScript, /JS). Potential execution risk.');
+    suspiciousIndicators.push('ELEVATED RISK: Embedded JavaScript Actions (/JavaScript, /JS). Potential client-side execution vulnerability.');
   }
   if (hasLaunch) {
-    securityScore -= 40;
-    detectedRisks.push('CRITICAL: Document contains external application launch actions (/Launch). High execution risk.');
+    suspiciousIndicators.push('HIGH RISK: External Application Launch Actions (/Launch). Attempted external process spawning vector.');
   }
   if (hasURI) {
-    securityScore -= 10;
-    detectedRisks.push('INFO: Document contains external clickable web hyperlinks (/URI). Potential phishing risk.');
+    suspiciousIndicators.push('ATTENTION: External Clickable Web Hyperlinks (/URI). Potential phishing or credential harvesting redirection.');
   }
   if (hasEmbeddedFiles) {
-    securityScore -= 15;
-    detectedRisks.push('WARNING: Document contains embedded file attachments (/EmbeddedFiles). Inspect attachments.');
+    suspiciousIndicators.push('ATTENTION: Embedded File Attachments (/EmbeddedFiles). Inspect embedded payloads before opening.');
   }
   if (hasXMP) {
-    detectedRisks.push('PRIVACY NOTICE: Document contains extended XMP XML metadata. Consider cleaning before sharing.');
+    suspiciousIndicators.push('PRIVACY NOTICE: Extended XMP XML Metadata stream present. May contain authoring environment information.');
   }
+
+  const riskLevel = suspiciousIndicators.length === 0
+    ? 'CLEAN HEURISTIC POSTURE (No known script/launch triggers detected)'
+    : `${suspiciousIndicators.length} POTENTIAL HAZARD INDICATOR(S) DETECTED`;
 
   const report = [
     `============================================================`,
-    `CONVET PULSE — PDF SECURITY & STRUCTURE AUDIT REPORT`,
-    `Target: ${file.name} (${rawBytes.length} bytes)`,
-    `PDF Version: %PDF-${pdfVersion} | Total Pages: ${pageCount}`,
-    `Audited: ${new Date().toISOString()}`,
+    `CONVET PULSE — PDF STRUCTURAL & SECURITY INSPECTOR REPORT`,
+    `Target File: ${file.name} (${rawBytes.length.toLocaleString()} bytes)`,
+    `Timestamp: ${new Date().toISOString()}`,
     `============================================================`,
     ``,
-    `SECURITY POSTURE SCORE: ${Math.max(0, securityScore)} / 100 (${securityScore >= 80 ? 'SAFE' : securityScore >= 50 ? 'MEDIUM RISK' : 'HIGH RISK'})`,
+    `IMPORTANT SECURITY ADVISORY:`,
+    `This tool executes a static structural keyword audit of PDF object`,
+    `dictionaries and stream markers. It is NOT an antivirus engine,`,
+    `dynamic sandbox, or comprehensive zero-day malware scanner.`,
+    `The absence of detected indicators does NOT guarantee that the file`,
+    `is free from weaponized exploits. Always open untrusted PDF files`,
+    `in a hardened, isolated sandbox viewer.`,
     ``,
-    `1. ENCRYPTION & ACCESS CONTROL:`,
-    `- Password Encrypted: ${isEncrypted ? 'YES (Access Protected)' : 'NO (Unencrypted / Public)'}`,
-    `- Digital Signatures Detected: ${hasSignatures ? 'YES (/Sig detected — note: signature validity requires public key cert verification)' : 'NO'}`,
+    `HEURISTIC SUMMARY: ${riskLevel}`,
     ``,
-    `2. STRUCTURAL THREAT INSPECTION:`,
-    `- Embedded JavaScript (/JS): ${hasJS ? 'DETECTED ⚠️' : 'CLEAN ✅'}`,
-    `- External Launch Actions (/Launch): ${hasLaunch ? 'DETECTED ⚠️' : 'CLEAN ✅'}`,
-    `- Embedded Attachments (/EmbeddedFiles): ${hasEmbeddedFiles ? 'DETECTED ⚠️' : 'CLEAN ✅'}`,
-    `- Interactive Form Fields (/AcroForm): ${hasAcroForm ? 'PRESENT' : 'NONE'}`,
-    `- External Web Links (/URI): ${hasURI ? 'DETECTED' : 'NONE'}`,
+    `1. CONFIRMED STRUCTURAL ATTRIBUTES:`,
+    ...confirmedAttributes.map((attr) => `  [✓] ${attr}`),
     ``,
-    `3. PRIVACY & METADATA AUDIT:`,
-    `- Extended XMP Stream (/Metadata): ${hasXMP ? 'PRESENT' : 'NONE'}`,
-    `- Title: ${pdfDoc ? (pdfDoc.getTitle() || '(empty)') : '(not inspected)'}`,
-    `- Author: ${pdfDoc ? (pdfDoc.getAuthor() || '(empty)') : '(not inspected)'}`,
-    `- Creator: ${pdfDoc ? (pdfDoc.getCreator() || '(empty)') : '(not inspected)'}`,
-    `- Producer: ${pdfDoc ? (pdfDoc.getProducer() || '(empty)') : '(not inspected)'}`,
+    `2. SUSPICIOUS / POTENTIALLY HAZARDOUS INDICATORS:`,
+    suspiciousIndicators.length > 0
+      ? suspiciousIndicators.map((ind) => `  [!] ${ind}`).join('\n')
+      : '  [✓] None detected. Document contains no embedded JavaScript, launch triggers, or suspicious stream keywords.',
     ``,
-    `4. DETECTED RISK DETAILS:`,
-    detectedRisks.length > 0 ? detectedRisks.map((r) => `* ${r}`).join('\n') : '* No security threats or malicious execution vectors detected.',
     `============================================================`,
   ].join('\n');
 
@@ -421,7 +574,8 @@ export async function pdfSecurityInspector(
     filename: `${baseName}_security_audit.txt`,
     mimeType: 'text/plain',
     meta: {
-      securityScore: Math.max(0, securityScore),
+      confirmedAttributesCount: confirmedAttributes.length,
+      suspiciousIndicatorsCount: suspiciousIndicators.length,
       isEncrypted: isEncrypted ? 'true' : 'false',
       hasJS: hasJS ? 'true' : 'false',
       hasLaunch: hasLaunch ? 'true' : 'false',

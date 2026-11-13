@@ -142,17 +142,17 @@ const dispatchMap: Record<string, ToolDispatch> = {
   // ── PDF EXTENDED TOOLS (10 tools) ─────────────────────
   'pdf-to-excel': {
     processor: async (files, opts) => (await import('./pdfExtendedTools')).pdfToExcel(files[0], opts),
-    optionsHint: 'Extracts PDF tabular data streams and layout into an editable Excel spreadsheet (.xlsx).',
+    optionsHint: 'Extracts searchable PDF text streams into an editable Excel spreadsheet (.xlsx). Generates native editable cells. Note: Scanned bitmap PDFs without text layers require OCR and complex graphical lines are not preserved.',
   },
 
   'pdf-to-powerpoint': {
     processor: async (files, opts) => (await import('./pdfExtendedTools')).pdfToPowerPoint(files[0], opts),
-    optionsHint: 'Converts each PDF page into a 16:9 widescreen presentation slide in PowerPoint format (.pptx).',
+    optionsHint: 'Converts each PDF page into an editable 16:9 widescreen PowerPoint presentation (.pptx) with structured slide text containers. Note: Vector graphics and proprietary layout geometries are simplified to slide text runs.',
   },
 
   'word-to-pdf': {
     processor: async (files, opts) => (await import('./pdfExtendedTools')).wordToPdf(files[0], opts),
-    optionsHint: 'Converts Microsoft Word (.docx) documents into clean, portable PDF format.',
+    optionsHint: 'Converts Microsoft Word (.docx) body text and headings into a portable A4 PDF document with word-wrapping. Note: Converts text and standard paragraphs; complex WordArt, macros, and advanced shapes are omitted.',
   },
 
   'excel-to-pdf': {
@@ -169,12 +169,12 @@ const dispatchMap: Record<string, ToolDispatch> = {
         default: 'landscape',
       },
     ],
-    optionsHint: 'Converts Microsoft Excel (.xlsx) spreadsheets into a formatted, printable PDF document.',
+    optionsHint: 'Converts Microsoft Excel (.xlsx) spreadsheets into a formatted, printable PDF document with auto-sized table columns and page breaks.',
   },
 
   'powerpoint-to-pdf': {
     processor: async (files, opts) => (await import('./pdfExtendedTools')).powerPointToPdf(files[0], opts),
-    optionsHint: 'Converts Microsoft PowerPoint (.pptx) presentation slides into a widescreen PDF presentation.',
+    optionsHint: 'Converts Microsoft PowerPoint (.pptx) slide text runs into a clean 16:9 widescreen PDF presentation. Note: Text content is converted; complex animations, slide transitions, and vector smart art are not preserved.',
   },
 
   'add-page-numbers': {

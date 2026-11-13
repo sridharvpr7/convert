@@ -1040,36 +1040,51 @@ export async function repairPdf(
     throw new ProcessorError('The supplied file is truncated or empty. PDF repair cannot reconstruct an empty file.', 'FILE_TOO_SMALL');
   }
 
-  let repairedDoc: PDFDocument;
-  let repairMethod = 'XRef Table Reconstruction';
+  let repairedDoc: PDFDocument | null = null;
+  let recoveryMethod = 'Cross-Reference Table Rebuild';
 
+  // Strategy 1: Attempt relaxed direct recovery parse
   try {
-    // Attempt relaxed recovery parse
     repairedDoc = await PDFDocument.load(rawBytes, {
       ignoreEncryption: true,
       parseSpeed: 100,
     });
   } catch {
-    // Structural recovery: scan and reconstruct header and trailer if damaged
+    // Strategy 2: Pre-process structural byte issues
     try {
       const textDecoder = new TextDecoder('latin1');
-      const rawText = textDecoder.decode(rawBytes);
-
-      // Verify or inject missing %PDF header
+      let rawText = textDecoder.decode(rawBytes);
       let cleanedBytes = rawBytes;
-      if (!rawText.startsWith('%PDF-')) {
-        const headerIndex = rawText.indexOf('%PDF-');
-        if (headerIndex > 0) {
-          cleanedBytes = rawBytes.slice(headerIndex);
-          repairMethod = 'Header Offset Resynchronization';
-        } else {
-          const header = new TextEncoder().encode('%PDF-1.4\n');
-          const merged = new Uint8Array(header.length + rawBytes.length);
-          merged.set(header, 0);
-          merged.set(rawBytes, header.length);
-          cleanedBytes = merged;
-          repairMethod = 'Standard Header Injection';
-        }
+
+      // 2a. Fix corrupted / offset header
+      const headerIdx = rawText.indexOf('%PDF-');
+      if (headerIdx > 0) {
+        cleanedBytes = rawBytes.slice(headerIdx);
+        rawText = textDecoder.decode(cleanedBytes);
+        recoveryMethod = 'Header Offset Resynchronization';
+      } else if (headerIdx === -1) {
+        const header = new TextEncoder().encode('%PDF-1.4\n');
+        const merged = new Uint8Array(header.length + rawBytes.length);
+        merged.set(header, 0);
+        merged.set(rawBytes, header.length);
+        cleanedBytes = merged;
+        rawText = textDecoder.decode(cleanedBytes);
+        recoveryMethod = 'Missing Header Injection';
+      }
+
+      // 2b. Fix missing or displaced %%EOF trailer marker
+      const eofIdx = rawText.lastIndexOf('%%EOF');
+      if (eofIdx === -1) {
+        const eofMarker = new TextEncoder().encode('\n%%EOF\n');
+        const merged = new Uint8Array(cleanedBytes.length + eofMarker.length);
+        merged.set(cleanedBytes, 0);
+        merged.set(eofMarker, cleanedBytes.length);
+        cleanedBytes = merged;
+        recoveryMethod += ' + EOF Marker Resynchronization';
+      } else if (eofIdx + 5 < cleanedBytes.length - 10) {
+        // Trailing garbage detected after %%EOF — truncate to valid EOF
+        cleanedBytes = cleanedBytes.slice(0, eofIdx + 6);
+        recoveryMethod += ' + Trailing Junk Truncation';
       }
 
       repairedDoc = await PDFDocument.load(cleanedBytes, {
@@ -1077,14 +1092,32 @@ export async function repairPdf(
       });
     } catch (recoveryErr) {
       throw new ProcessorError(
-        `Unable to repair PDF: Document structures, catalogs, or indirect objects are irreversibly corrupt. (${(recoveryErr as Error)?.message})`,
+        `Unable to repair PDF: Document root catalog, page tree, or indirect objects are irreversibly corrupt. (${(recoveryErr as Error)?.message})`,
         'REPAIR_UNRECOVERABLE'
       );
     }
   }
 
+  if (!repairedDoc) {
+    throw new ProcessorError('Failed to reconstruct valid PDF document structure.', 'REPAIR_FAILED');
+  }
+
   // Re-serialize with clean object streams and freshly computed cross-reference tables
   const repairedBytes = await repairedDoc.save({ useObjectStreams: true });
+
+  // Independent output validation: verify that the resulting file loads cleanly
+  try {
+    const verificationDoc = await PDFDocument.load(repairedBytes, { ignoreEncryption: true });
+    if (verificationDoc.getPageCount() === 0) {
+      throw new Error('Repaired PDF contains 0 readable pages.');
+    }
+  } catch (verifyErr) {
+    throw new ProcessorError(
+      `Repaired PDF failed independent verification: ${(verifyErr as Error)?.message}`,
+      'REPAIR_VERIFICATION_FAILED'
+    );
+  }
+
   const blob = new Blob([toBlobPart(repairedBytes)], { type: 'application/pdf' });
   const baseName = file.name.replace(/\.pdf$/i, '') || 'document';
 
@@ -1094,9 +1127,10 @@ export async function repairPdf(
     mimeType: 'application/pdf',
     meta: {
       pagesCount: repairedDoc.getPageCount(),
-      recoveryMethod: repairMethod,
+      recoveryMethod,
       originalSize: file.size,
       repairedSize: blob.size,
+      integrityValidated: 'true',
     },
   };
 }

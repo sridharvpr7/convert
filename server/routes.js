@@ -5,6 +5,10 @@
 // ============================================================
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { db } from './db.js';
 import { telegramService } from './telegram.js';
 import {
@@ -226,8 +230,7 @@ export async function handleApiRoute(req, res, url) {
   if (pathname === '/api/pdf/encrypt' && method === 'POST') {
     let hasQpdf = false;
     try {
-      const { execSync } = await import('node:child_process');
-      execSync('qpdf --version', { stdio: 'ignore' });
+      execFileSync('qpdf', ['--version'], { stdio: 'ignore' });
       hasQpdf = true;
     } catch {
       hasQpdf = false;
@@ -237,18 +240,59 @@ export async function handleApiRoute(req, res, url) {
       return sendJson(501, {
         error: 'SYSTEM_BINARY_NOT_FOUND',
         message: 'QPDF binary is not installed on this host environment. Genuine ISO 32000-2 AES-256 PDF encryption requires the QPDF system package. Pseudo-encryption will never be generated to protect document security.',
-        requirement: 'apt-get install -y qpdf (configured via Dockerfile or Render apt buildpack)',
+        requirement: 'Render Native Node does not include qpdf by default. See deployment instructions in docs/RENDER_QPDF_SETUP.md or convert render.yaml service to Docker environment.',
       });
     }
 
-    return sendJson(200, { status: 'ready' });
+    const body = await readBody();
+    if (!body || !body.fileBase64) {
+      return sendJson(400, { error: 'fileBase64 is required' });
+    }
+
+    const userPassword = String(body.userPassword || body.password || '');
+    const ownerPassword = String(body.ownerPassword || userPassword);
+    if (!userPassword) {
+      return sendJson(400, { error: 'userPassword is required' });
+    }
+
+    const tempDir = os.tmpdir();
+    const uniqueId = crypto.randomUUID();
+    const inPath = path.join(tempDir, `qpdf_in_${uniqueId}.pdf`);
+    const outPath = path.join(tempDir, `qpdf_out_${uniqueId}.pdf`);
+
+    try {
+      const inBuffer = Buffer.from(body.fileBase64, 'base64');
+      fs.writeFileSync(inPath, inBuffer);
+
+      // Safe argument vector prevents shell injection
+      execFileSync('qpdf', [
+        '--encrypt',
+        userPassword,
+        ownerPassword,
+        '256',
+        '--',
+        inPath,
+        outPath,
+      ]);
+
+      const outBuffer = fs.readFileSync(outPath);
+      return sendJson(200, {
+        success: true,
+        fileBase64: outBuffer.toString('base64'),
+        size: outBuffer.length,
+      });
+    } catch (err) {
+      return sendJson(500, { error: 'Encryption failed: ' + (err.message || 'QPDF execution error') });
+    } finally {
+      try { if (fs.existsSync(inPath)) fs.unlinkSync(inPath); } catch {}
+      try { if (fs.existsSync(outPath)) fs.unlinkSync(outPath); } catch {}
+    }
   }
 
   if (pathname === '/api/pdf/decrypt' && method === 'POST') {
     let hasQpdf = false;
     try {
-      const { execSync } = await import('node:child_process');
-      execSync('qpdf --version', { stdio: 'ignore' });
+      execFileSync('qpdf', ['--version'], { stdio: 'ignore' });
       hasQpdf = true;
     } catch {
       hasQpdf = false;
@@ -258,11 +302,45 @@ export async function handleApiRoute(req, res, url) {
       return sendJson(501, {
         error: 'SYSTEM_BINARY_NOT_FOUND',
         message: 'QPDF binary is not installed on this host environment. Genuine cryptographic PDF stream decryption requires the QPDF system package. Pseudo-decryption will never be generated to protect document integrity.',
-        requirement: 'apt-get install -y qpdf (configured via Dockerfile or Render apt buildpack)',
+        requirement: 'Render Native Node does not include qpdf by default. See deployment instructions in docs/RENDER_QPDF_SETUP.md or convert render.yaml service to Docker environment.',
       });
     }
 
-    return sendJson(200, { status: 'ready' });
+    const body = await readBody();
+    if (!body || !body.fileBase64) {
+      return sendJson(400, { error: 'fileBase64 is required' });
+    }
+
+    const password = String(body.password || '');
+    const tempDir = os.tmpdir();
+    const uniqueId = crypto.randomUUID();
+    const inPath = path.join(tempDir, `qpdf_in_${uniqueId}.pdf`);
+    const outPath = path.join(tempDir, `qpdf_out_${uniqueId}.pdf`);
+
+    try {
+      const inBuffer = Buffer.from(body.fileBase64, 'base64');
+      fs.writeFileSync(inPath, inBuffer);
+
+      // Safe argument vector prevents shell injection
+      execFileSync('qpdf', [
+        `--password=${password}`,
+        '--decrypt',
+        inPath,
+        outPath,
+      ]);
+
+      const outBuffer = fs.readFileSync(outPath);
+      return sendJson(200, {
+        success: true,
+        fileBase64: outBuffer.toString('base64'),
+        size: outBuffer.length,
+      });
+    } catch (err) {
+      return sendJson(401, { error: 'Decryption failed: Incorrect password or invalid encrypted PDF format.' });
+    } finally {
+      try { if (fs.existsSync(inPath)) fs.unlinkSync(inPath); } catch {}
+      try { if (fs.existsSync(outPath)) fs.unlinkSync(outPath); } catch {}
+    }
   }
 
   // ─────────────────────────────────────────────────────────
