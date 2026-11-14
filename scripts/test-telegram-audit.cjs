@@ -32,6 +32,8 @@ async function runAudit() {
     isDuplicate,
     clearDedupeKey,
     PRODUCTION_URL,
+    DEPRECATED_DOMAINS,
+    checkEnvironmentUrlOverrides,
     sendTelegramMessage,
     getAdminChatId,
     getBotToken,
@@ -205,7 +207,7 @@ async function runAudit() {
     assert(typeof kb.inline_keyboard[0][0].url === 'string');
   });
 
-  await test('URL is exactly https://convetpulse.onrender.com in production', async () => {
+  await test('URL is exactly https://convetpulse.onrender.com/ in production', async () => {
     const originalEnv = process.env.NODE_ENV;
     const originalAppUrl = process.env.APP_URL;
 
@@ -213,10 +215,18 @@ async function runAudit() {
     delete process.env.APP_URL;
 
     const url = getDashboardUrl();
-    assert.strictEqual(url, 'https://convetpulse.onrender.com');
+    assert.strictEqual(url, 'https://convetpulse.onrender.com/');
 
     process.env.NODE_ENV = originalEnv;
     process.env.APP_URL = originalAppUrl;
+  });
+
+  await test('Admin Console URL is exactly https://convetpulse.onrender.com/admin', async () => {
+    const adminUrl = getAdminDashboardUrl();
+    assert.strictEqual(adminUrl, 'https://convetpulse.onrender.com/admin');
+
+    const jobAdminUrl = getAdminDashboardUrl('?job=JOB-12345');
+    assert.strictEqual(jobAdminUrl, 'https://convetpulse.onrender.com/admin?job=JOB-12345');
   });
 
   await test('URL uses HTTPS protocol', async () => {
@@ -232,7 +242,7 @@ async function runAudit() {
     process.env.APP_URL = 'http://localhost:5173';
 
     const url = getDashboardUrl();
-    assert.strictEqual(url, 'https://convetpulse.onrender.com', 'Localhost must be overridden by production HTTPS url');
+    assert.strictEqual(url, 'https://convetpulse.onrender.com/', 'Localhost must be overridden by production HTTPS url');
 
     process.env.NODE_ENV = originalEnv;
     process.env.APP_URL = originalAppUrl;
@@ -243,9 +253,147 @@ async function runAudit() {
 
     process.env.APP_URL = 'not-a-valid-url';
     const url = getDashboardUrl();
-    assert.strictEqual(url, 'https://convetpulse.onrender.com');
+    assert.strictEqual(url, 'https://convetpulse.onrender.com/');
 
     process.env.APP_URL = originalAppUrl;
+  });
+
+  await test('Deprecated domain conveter-4rmd.onrender.com in APP_URL is rejected and falls back to production URL', async () => {
+    const originalAppUrl = process.env.APP_URL;
+
+    process.env.APP_URL = 'https://conveter-4rmd.onrender.com/';
+    const url = getDashboardUrl();
+    assert.strictEqual(url, 'https://convetpulse.onrender.com/', 'Must reject old conveter-4rmd domain');
+
+    process.env.APP_URL = originalAppUrl;
+  });
+
+  await test('Deprecated domain in DASHBOARD_URL or FRONTEND_URL is rejected', async () => {
+    const origApp = process.env.APP_URL;
+    const origDash = process.env.DASHBOARD_URL;
+    const origFront = process.env.FRONTEND_URL;
+
+    delete process.env.APP_URL;
+    process.env.DASHBOARD_URL = 'https://conveter-4rmd.onrender.com';
+    assert.strictEqual(getDashboardUrl(), 'https://convetpulse.onrender.com/');
+
+    delete process.env.DASHBOARD_URL;
+    process.env.FRONTEND_URL = 'https://conveter.onrender.com';
+    assert.strictEqual(getDashboardUrl(), 'https://convetpulse.onrender.com/');
+
+    if (origApp) process.env.APP_URL = origApp; else delete process.env.APP_URL;
+    if (origDash) process.env.DASHBOARD_URL = origDash; else delete process.env.DASHBOARD_URL;
+    if (origFront) process.env.FRONTEND_URL = origFront; else delete process.env.FRONTEND_URL;
+  });
+
+  await test('checkEnvironmentUrlOverrides detects and flags conveter-4rmd.onrender.com', async () => {
+    const origApp = process.env.APP_URL;
+    process.env.APP_URL = 'https://conveter-4rmd.onrender.com';
+
+    const overrides = checkEnvironmentUrlOverrides();
+    const appOverride = overrides.find((o) => o.varName === 'APP_URL');
+    assert(appOverride, 'Must check APP_URL');
+    assert.strictEqual(appOverride.isDeprecated, true, 'Must identify conveter-4rmd as deprecated');
+
+    if (origApp) process.env.APP_URL = origApp; else delete process.env.APP_URL;
+  });
+
+  await test('Inline keyboard URL sanitizer replaces any occurrence of conveter-4rmd.onrender.com with convetpulse.onrender.com', async () => {
+    const originalToken = process.env.TELEGRAM_BOT_TOKEN;
+    const originalFetch = global.fetch;
+
+    process.env.TELEGRAM_BOT_TOKEN = 'test_token';
+    let dispatchedBody = null;
+
+    global.fetch = async (url, opts) => {
+      dispatchedBody = JSON.parse(opts.body);
+      return {
+        json: async () => ({ ok: true, result: { message_id: 12345 } }),
+      };
+    };
+
+    const replyMarkup = {
+      inline_keyboard: [
+        [{ text: 'Old Button', url: 'https://conveter-4rmd.onrender.com/tools/pdf' }],
+      ],
+    };
+
+    await sendTelegramMessage('test_chat', 'Test sanitize', { replyMarkup }, 'test');
+    assert(dispatchedBody, 'Request must have been dispatched');
+    const btnUrl = dispatchedBody.reply_markup.inline_keyboard[0][0].url;
+    assert.strictEqual(btnUrl, 'https://convetpulse.onrender.com/tools/pdf');
+    assert(!btnUrl.includes('conveter-4rmd.onrender.com'), 'Must not contain old domain');
+
+    if (originalToken) process.env.TELEGRAM_BOT_TOKEN = originalToken; else delete process.env.TELEGRAM_BOT_TOKEN;
+    global.fetch = originalFetch;
+  });
+
+  await test('All notification templates and bot commands produce buttons pointing to convetpulse.onrender.com and never to conveter-4rmd.onrender.com', async () => {
+    const originalToken = process.env.TELEGRAM_BOT_TOKEN;
+    const originalChat = process.env.TELEGRAM_CHAT_ID;
+    const originalFetch = global.fetch;
+
+    process.env.TELEGRAM_BOT_TOKEN = 'test_token';
+    process.env.TELEGRAM_CHAT_ID = 'test_chat';
+    const interceptedUrls = [];
+
+    global.fetch = async (url, opts) => {
+      const parsedBody = JSON.parse(opts.body);
+      if (parsedBody.reply_markup?.inline_keyboard) {
+        for (const row of parsedBody.reply_markup.inline_keyboard) {
+          for (const btn of row) {
+            if (btn.url) interceptedUrls.push(btn.url);
+          }
+        }
+      }
+      return {
+        json: async () => ({ ok: true, result: { message_id: 111 } }),
+      };
+    };
+
+    // 1. New Visitor
+    const testVisId = `chk_vis_${Date.now()}`;
+    db.clearDedupe(`visitor_new_${testVisId}`);
+    await telegramService.notifyNewVisitor({ visitorId: testVisId, page: 'Home' });
+
+    // 2. User Registered
+    const testRegId = `chk_user_${Date.now()}@example.com`;
+    db.clearDedupe(`user_reg_${testRegId}`);
+    await telegramService.notifyNewUser({ id: 'u1', name: 'Tester', email: testRegId });
+
+    // 3. Conversion Completed
+    const testJobId = `JOB-CHK-${Date.now()}`;
+    db.clearDedupe(`complete_${testJobId}`);
+    await telegramService.notifyConversionCompleted({ id: testJobId, toolName: 'PDF to Excel' });
+
+    // 4. Payment
+    const testPayId = `pay_${Date.now()}`;
+    db.clearDedupe(`payment_success_${testPayId}`);
+    await telegramService.notifyPaymentReceived({ id: testPayId, order_id: testPayId, amount: 49900 });
+
+    // 5. System Error
+    db.clearDedupe(`sys_err_Test_error_${Date.now()}`);
+    await telegramService.notifySystemError(new Error(`Test error ${Date.now()}`), 'Test');
+
+    // 6. Bot command /start
+    await telegramService.handleWebhookUpdate({
+      message: { chat: { id: 'test_chat' }, text: '/start', from: { first_name: 'Admin' } },
+    });
+
+    // 7. Bot command /stats
+    await telegramService.handleWebhookUpdate({
+      message: { chat: { id: 'test_chat' }, text: '/stats', from: { first_name: 'Admin' } },
+    });
+
+    assert(interceptedUrls.length >= 7, 'Must have gathered button URLs across all templates');
+    for (const url of interceptedUrls) {
+      assert(url.includes('convetpulse.onrender.com'), `URL must be on convetpulse domain: ${url}`);
+      assert(!url.includes('conveter-4rmd.onrender.com'), `URL must NOT contain old conveter-4rmd domain: ${url}`);
+    }
+
+    if (originalToken) process.env.TELEGRAM_BOT_TOKEN = originalToken; else delete process.env.TELEGRAM_BOT_TOKEN;
+    if (originalChat) process.env.TELEGRAM_CHAT_ID = originalChat; else delete process.env.TELEGRAM_CHAT_ID;
+    global.fetch = originalFetch;
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -433,7 +581,8 @@ async function runAudit() {
     const adminUrl = getAdminDashboardUrl();
 
     assert.ok(publicUrl.startsWith('https://'), 'Public URL must be HTTPS');
-    assert.strictEqual(adminUrl, `${publicUrl}/admin`, 'Admin URL must point to /admin');
+    assert.strictEqual(adminUrl, `${publicUrl.replace(/\/+$/, '')}/admin`, 'Admin URL must point to /admin');
+    assert.strictEqual(adminUrl, 'https://convetpulse.onrender.com/admin');
 
     const adminKeyboard = createDashboardKeyboard([
       [{ text: '🔐 Admin Console', url: adminUrl }],

@@ -19,14 +19,75 @@ export const getAdminChatId = () =>
 export const getWebhookSecret = () =>
   (process.env.TELEGRAM_WEBHOOK_SECRET || process.env.WEBHOOK_SECRET || '').trim();
 
-// Canonical production HTTPS URL
-export const PRODUCTION_URL = 'https://convetpulse.onrender.com';
+// Canonical production HTTPS URL (ending with slash as required)
+export const PRODUCTION_URL = 'https://convetpulse.onrender.com/';
+
+// Known obsolete / deprecated domains that must NEVER be used
+export const DEPRECATED_DOMAINS = [
+  'conveter-4rmd.onrender.com',
+  'conveter.onrender.com',
+];
 
 /**
- * Returns a validated production-safe HTTPS Dashboard URL
+ * Checks if any environment variable attempts to override the URL with an obsolete domain
+ */
+export function checkEnvironmentUrlOverrides() {
+  const varsToCheck = [
+    'APP_URL',
+    'DASHBOARD_URL',
+    'FRONTEND_URL',
+    'RENDER_EXTERNAL_URL',
+    'RENDER_URL',
+  ];
+  const overrides = [];
+
+  for (const varName of varsToCheck) {
+    const rawVal = process.env[varName];
+    if (rawVal) {
+      const val = String(rawVal).trim();
+      const isDeprecated = DEPRECATED_DOMAINS.some((domain) => val.includes(domain));
+      overrides.push({
+        varName,
+        isDeprecated,
+        domain: val.replace(/^https?:\/\//, '').split('/')[0],
+      });
+      if (isDeprecated) {
+        console.warn(
+          `[CRITICAL CONFIG WARNING] Environment variable ${varName} is configured with obsolete Render domain ("${val}"). ` +
+          `CONVET PULSE will safely ignore this and use canonical URL: ${PRODUCTION_URL}. ` +
+          `ACTION REQUIRED: Update ${varName} to https://convetpulse.onrender.com/ in your Render Environment settings!`
+        );
+      }
+    }
+  }
+
+  return overrides;
+}
+
+/**
+ * Returns a validated production-safe HTTPS Dashboard URL ending with /
  */
 export function getDashboardUrl() {
-  const envUrl = (process.env.APP_URL || '').trim();
+  // Check common URL environment variables
+  const envUrl = (
+    process.env.APP_URL ||
+    process.env.DASHBOARD_URL ||
+    process.env.FRONTEND_URL ||
+    ''
+  ).trim();
+
+  // If environment variable contains a known obsolete domain, log warning and discard
+  if (envUrl) {
+    const hasDeprecatedDomain = DEPRECATED_DOMAINS.some((domain) => envUrl.includes(domain));
+    if (hasDeprecatedDomain) {
+      console.warn(
+        `[Config Warning] Outdated Render domain detected in environment variable: "${envUrl}". ` +
+        `Falling back to canonical production URL: ${PRODUCTION_URL}. Please update APP_URL in your Render settings!`
+      );
+      return PRODUCTION_URL;
+    }
+  }
+
   if (!envUrl) return PRODUCTION_URL;
 
   // In production, reject localhost or non-https URLs
@@ -39,7 +100,8 @@ export function getDashboardUrl() {
   try {
     const parsed = new URL(envUrl);
     if (parsed.protocol === 'https:' || (parsed.protocol === 'http:' && process.env.NODE_ENV !== 'production')) {
-      return envUrl.replace(/\/+$/, '');
+      const clean = envUrl.replace(/\/+$/, '');
+      return `${clean}/`;
     }
   } catch {
     // Malformed URL, use production fallback
@@ -51,8 +113,10 @@ export function getDashboardUrl() {
 /**
  * Returns the authenticated Admin Console URL
  */
-export function getAdminDashboardUrl() {
-  return `${getDashboardUrl()}/admin`;
+export function getAdminDashboardUrl(query = '') {
+  const base = getDashboardUrl().replace(/\/+$/, '');
+  const suffix = query ? `/admin${query.startsWith('?') ? query : `?${query}`}` : '/admin';
+  return `${base}${suffix}`;
 }
 
 /**
@@ -169,6 +233,12 @@ export async function sendTelegramMessage(chatId, text, options = {}, eventType 
       if (Array.isArray(row)) {
         for (const btn of row) {
           if (btn.url && typeof btn.url === 'string') {
+            // Force-replace any deprecated Render domain with canonical domain
+            for (const deprecated of DEPRECATED_DOMAINS) {
+              if (btn.url.includes(deprecated)) {
+                btn.url = btn.url.replace(deprecated, 'convetpulse.onrender.com');
+              }
+            }
             try {
               const parsed = new URL(btn.url);
               if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
@@ -751,7 +821,7 @@ export const telegramService = {
 
     // Include both the public Dashboard button and the direct Admin Console button for fast administrative triage
     const replyMarkup = createDashboardKeyboard([
-      [{ text: '🔐 Admin Console', url: `${getDashboardUrl()}/admin` }],
+      [{ text: '🔐 Admin Console', url: getAdminDashboardUrl() }],
     ]);
     const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'system_error');
     if (!res || !res.ok) {
@@ -846,7 +916,7 @@ export const telegramService = {
         `🌐 Dashboard: <a href="${getDashboardUrl()}">${getDashboardUrl()}</a>`,
       ].join('\n');
       const replyMarkup = createDashboardKeyboard([
-        [{ text: '📊 Admin Console', url: `${getDashboardUrl()}/admin` }],
+        [{ text: '📊 Admin Console', url: getAdminDashboardUrl() }],
       ]);
       await sendTelegramMessage(chatId, welcome, { replyMarkup });
       return { status: 200, message: 'Start handled' };
@@ -899,7 +969,7 @@ export const telegramService = {
       ].join('\n');
 
       const replyMarkup = createDashboardKeyboard([
-        [{ text: '🔍 View Details', url: `${getDashboardUrl()}/admin?job=${job.id}` }],
+        [{ text: '🔍 View Details', url: getAdminDashboardUrl(`?job=${job.id}`) }],
       ]);
       await sendTelegramMessage(chatId, msg, { replyMarkup });
       return { status: 200 };
@@ -942,7 +1012,7 @@ export const telegramService = {
       const replyMarkup = createDashboardKeyboard([
         [
           { text: '💬 Add Comment', callback_data: `comment:${job.id}` },
-          { text: '📊 Admin Dashboard', url: `${getDashboardUrl()}/admin?job=${job.id}` },
+          { text: '📊 Admin Dashboard', url: getAdminDashboardUrl(`?job=${job.id}`) },
         ],
       ]);
       await sendTelegramMessage(chatId, msg, { replyMarkup });
@@ -1020,7 +1090,7 @@ export const telegramService = {
       ].join('\n');
 
       const replyMarkup = createDashboardKeyboard([
-        [{ text: '🖥 Full Admin Dashboard', url: `${getDashboardUrl()}/admin` }],
+        [{ text: '🖥 Full Admin Dashboard', url: getAdminDashboardUrl() }],
       ]);
       await sendTelegramMessage(chatId, msg, { replyMarkup });
       return { status: 200 };
