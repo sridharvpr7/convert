@@ -150,11 +150,22 @@ server.listen(PORT, () => {
   console.log(`[CONVET PULSE] Server running at http://localhost:${PORT}`);
   console.log(`[CONVET PULSE] Healthcheck ready at http://localhost:${PORT}/api/health`);
   if (initialAdminPassword) {
+    const isProduction = process.env.NODE_ENV === 'production' || process.env.RENDER;
     console.log('─────────────────────────────────────────────────────────────');
     console.log('[Auth] Initial Administrator Account Created:');
-    console.log('       Username: admin');
-    console.log(`       Password: ${initialAdminPassword}`);
-    console.log('       Note: Change this password upon first login.');
+    console.log(`       Username: ${initialAdminPassword.username || 'admin'}`);
+    if (isProduction) {
+      if (initialAdminPassword.isGenerated) {
+        console.log('       Password: [REDACTED IN PRODUCTION LOGS]');
+        console.log('       Security Notice: Set ADMIN_PASSWORD in your Render Environment settings');
+        console.log('                        to establish a permanent administrator password.');
+      } else {
+        console.log('       Password: [CONFIGURED VIA ADMIN_PASSWORD ENVIRONMENT VARIABLE]');
+      }
+    } else {
+      console.log(`       Password: ${initialAdminPassword.password}`);
+      console.log('       Note: Change this password upon first login.');
+    }
     console.log('─────────────────────────────────────────────────────────────');
   }
 });

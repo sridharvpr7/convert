@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { db } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,9 +42,34 @@ function hashPassword(password, salt) {
   });
 }
 
+export function isScryptHash(str) {
+  return typeof str === 'string' && str.length === 128 && /^[0-9a-fA-F]{128}$/.test(str);
+}
+
 async function verifyPassword(password, storedHash, storedSalt) {
-  const { hash } = await hashPassword(password, storedSalt);
-  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(storedHash, 'hex'));
+  if (!password || !storedHash || !storedSalt) return false;
+
+  // Enforce genuine 128-hex-character scrypt hash; never accept plaintext
+  if (!isScryptHash(storedHash)) {
+    return false;
+  }
+
+  // Salt must be a valid hex string of at least 32 characters (16+ bytes)
+  if (typeof storedSalt !== 'string' || storedSalt.length < 32 || !/^[0-9a-fA-F]+$/.test(storedSalt)) {
+    return false;
+  }
+
+  try {
+    const { hash } = await hashPassword(password, storedSalt);
+    const bufA = Buffer.from(hash, 'hex');
+    const bufB = Buffer.from(storedHash, 'hex');
+    if (bufA.length !== bufB.length) {
+      return false;
+    }
+    return crypto.timingSafeEqual(bufA, bufB);
+  } catch {
+    return false;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -57,44 +83,133 @@ function ensureConfigDir() {
   }
 }
 
-function loadAdminConfig() {
+function ensureLocalAdminJsonMirror(cfg) {
+  try {
+    ensureConfigDir();
+    if (!fs.existsSync(ADMIN_CONFIG_PATH) && cfg?.admin) {
+      fs.writeFileSync(ADMIN_CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
+    }
+  } catch {}
+}
+
+function syncToDatabase(cfg) {
+  try {
+    if (db && typeof db.saveAdminCredential === 'function' && cfg?.admin) {
+      db.saveAdminCredential({
+        username: cfg.admin.username,
+        passwordHash: cfg.admin.passwordHash,
+        salt: cfg.admin.salt,
+        mustChangePassword: cfg.admin.mustChangePassword,
+      });
+    }
+  } catch (err) {
+    console.warn('[Auth] Database sync error:', err.message);
+  }
+}
+
+/**
+ * Performs a safe, one-time migration if legacy plaintext credentials are detected.
+ * Converts plaintext to genuine scrypt hash and immediately persists it.
+ */
+async function migrateIfLegacyCredentials(cfg) {
+  if (!cfg?.admin?.passwordHash) return false;
+
+  if (!isScryptHash(cfg.admin.passwordHash)) {
+    const legacyPlaintext = String(cfg.admin.passwordHash).trim();
+    if (!legacyPlaintext) return false;
+
+    const { hash, salt } = await hashPassword(legacyPlaintext);
+    cfg.admin.passwordHash = hash;
+    cfg.admin.salt = salt;
+    saveAdminConfig();
+    console.log('[Auth Security] One-time migration completed: legacy credentials migrated to scrypt hash.');
+    return true;
+  }
+  return false;
+}
+
+async function loadAdminConfig() {
   ensureConfigDir();
 
-  // 1. Try persistent disk path first if DATA_DIR is configured (Render persistent disk)
+  // 1. Try SQLite / JSON store first (primary persistent database)
+  try {
+    if (db && typeof db.getAdminCredential === 'function') {
+      const dbCred = db.getAdminCredential('admin');
+      if (dbCred && dbCred.passwordHash && dbCred.salt) {
+        adminConfig = {
+          admin: {
+            username: dbCred.username,
+            passwordHash: dbCred.passwordHash,
+            salt: dbCred.salt,
+            mustChangePassword: Boolean(dbCred.mustChangePassword),
+          },
+        };
+        await migrateIfLegacyCredentials(adminConfig);
+        ensureLocalAdminJsonMirror(adminConfig);
+        return false; // Found in persistent database!
+      }
+    }
+  } catch (err) {
+    console.warn('[Auth] Database admin lookup error:', err.message);
+  }
+
+  // 2. Try persistent disk path if DATA_DIR is configured (Render persistent disk)
   if (process.env.DATA_DIR) {
-    const persistentPath = path.join(process.env.DATA_DIR, 'config', 'admin.json');
-    if (fs.existsSync(persistentPath)) {
-      try {
-        adminConfig = JSON.parse(fs.readFileSync(persistentPath, 'utf8'));
-        return false;
-      } catch (err) {
-        console.error('[Auth] Failed to parse persistent admin.json:', err.message);
+    const candidates = [
+      path.join(process.env.DATA_DIR, 'config', 'admin.json'),
+      path.join(process.env.DATA_DIR, 'admin.json'),
+    ];
+    for (const persistentPath of candidates) {
+      if (fs.existsSync(persistentPath)) {
+        try {
+          const parsed = JSON.parse(fs.readFileSync(persistentPath, 'utf8'));
+          if (parsed?.admin?.passwordHash) {
+            adminConfig = parsed;
+            await migrateIfLegacyCredentials(adminConfig);
+            syncToDatabase(adminConfig);
+            ensureLocalAdminJsonMirror(adminConfig);
+            return false;
+          }
+        } catch (err) {
+          console.error('[Auth] Failed to parse persistent admin.json:', err.message);
+        }
       }
     }
   }
 
-  // 2. Fall back to application CONFIG_DIR
+  // 3. Fall back to application CONFIG_DIR (local config/admin.json)
   if (fs.existsSync(ADMIN_CONFIG_PATH)) {
     try {
-      adminConfig = JSON.parse(fs.readFileSync(ADMIN_CONFIG_PATH, 'utf8'));
-      return false; // not first run
+      const parsed = JSON.parse(fs.readFileSync(ADMIN_CONFIG_PATH, 'utf8'));
+      if (parsed?.admin?.passwordHash) {
+        adminConfig = parsed;
+        await migrateIfLegacyCredentials(adminConfig);
+        syncToDatabase(adminConfig);
+        return false; // not first run
+      }
     } catch (err) {
       console.error('[Auth] Failed to parse admin.json:', err.message);
     }
   }
-  return true; // needs initialization
+
+  return true; // Genuinely first run, needs initialization
 }
 
 function saveAdminConfig() {
+  if (!adminConfig?.admin) return;
+
+  // 1. Persist to primary SQLite / JSON database
+  syncToDatabase(adminConfig);
+
+  // 2. Persist to application CONFIG_DIR
   ensureConfigDir();
   try {
     fs.writeFileSync(ADMIN_CONFIG_PATH, JSON.stringify(adminConfig, null, 2), 'utf8');
   } catch (err) {
     console.warn('[Auth] Failed to persist admin.json (ephemeral FS?):', err.message);
-    // Continue with in-memory config
   }
 
-  // Also persist to Render Persistent Disk if DATA_DIR is configured
+  // 3. Persist to Render Persistent Disk if DATA_DIR is configured
   if (process.env.DATA_DIR) {
     try {
       const persistentDir = path.join(process.env.DATA_DIR, 'config');
@@ -102,6 +217,7 @@ function saveAdminConfig() {
         fs.mkdirSync(persistentDir, { recursive: true });
       }
       fs.writeFileSync(path.join(persistentDir, 'admin.json'), JSON.stringify(adminConfig, null, 2), 'utf8');
+      fs.writeFileSync(path.join(process.env.DATA_DIR, 'admin.json'), JSON.stringify(adminConfig, null, 2), 'utf8');
     } catch (err) {
       console.warn('[Auth] Failed to persist admin.json to DATA_DIR:', err.message);
     }
@@ -110,29 +226,47 @@ function saveAdminConfig() {
 
 /**
  * Initialize admin credentials. Call on server startup.
- * Returns the initial password if this is first run, null otherwise.
+ * Returns credentials summary if freshly created, null if already exists.
  */
 export async function initializeAuth() {
-  const isFirstRun = loadAdminConfig();
+  const isFirstRun = await loadAdminConfig();
 
-  if (isFirstRun || !adminConfig?.admin) {
-    const initialPassword = crypto.randomBytes(12).toString('base64url');
-    const { hash, salt } = await hashPassword(initialPassword);
-
-    adminConfig = {
-      admin: {
-        username: 'admin',
-        passwordHash: hash,
-        salt: salt,
-        mustChangePassword: true,
-      },
-    };
-
-    saveAdminConfig();
-    return initialPassword;
+  // If administrator already exists anywhere, NEVER overwrite or recreate!
+  if (!isFirstRun && adminConfig?.admin) {
+    return null;
   }
 
-  return null;
+  // Check if an admin password was supplied via environment variables
+  // (e.g. ADMIN_PASSWORD or ADMIN_INITIAL_PASSWORD)
+  const envPassword = (process.env.ADMIN_PASSWORD || process.env.ADMIN_INITIAL_PASSWORD || '').trim();
+  const envUsername = (process.env.ADMIN_USERNAME || 'admin').trim();
+
+  let initialPassword = envPassword;
+  let isGenerated = false;
+
+  if (!initialPassword) {
+    initialPassword = crypto.randomBytes(12).toString('base64url');
+    isGenerated = true;
+  }
+
+  const { hash, salt } = await hashPassword(initialPassword);
+
+  adminConfig = {
+    admin: {
+      username: envUsername,
+      passwordHash: hash,
+      salt: salt,
+      mustChangePassword: isGenerated,
+    },
+  };
+
+  saveAdminConfig();
+
+  return {
+    username: envUsername,
+    password: initialPassword,
+    isGenerated,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -293,6 +427,10 @@ export async function login(req) {
  * Verify credentials and create session.
  */
 export async function authenticate(username, password, ip) {
+  if (!adminConfig?.admin) {
+    await loadAdminConfig();
+  }
+
   if (!adminConfig?.admin) {
     return { success: false, error: 'Admin not configured' };
   }

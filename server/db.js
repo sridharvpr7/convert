@@ -178,6 +178,16 @@ function initSqliteTables(db) {
       created_at TEXT NOT NULL,
       expires_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS admin_credentials (
+      id TEXT PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      salt TEXT NOT NULL,
+      must_change_password INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   // 2. Safe migrations for existing databases
@@ -212,6 +222,7 @@ function initSqliteTables(db) {
   runMigration('CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments(order_id)');
   runMigration('CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id)');
   runMigration('CREATE INDEX IF NOT EXISTS idx_dedupe_expires ON notification_dedupe(expires_at)');
+  runMigration('CREATE TABLE IF NOT EXISTS admin_credentials (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, salt TEXT NOT NULL, must_change_password INTEGER DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)');
 
   // 4. Initialize default notification settings if empty
   const defaultSettings = [
@@ -252,6 +263,7 @@ let jsonStore = {
   usage_events: [],
   payments: [],
   notification_dedupe: [],
+  admin_credentials: [],
   notification_settings: {
     notify_new_visitor: 'true',
     notify_returning_visitor: 'false',
@@ -280,6 +292,7 @@ function initJsonStore() {
       if (!jsonStore.premium_entitlements) jsonStore.premium_entitlements = [];
       if (!jsonStore.notification_logs) jsonStore.notification_logs = [];
       if (!jsonStore.notification_dedupe) jsonStore.notification_dedupe = [];
+      if (!jsonStore.admin_credentials) jsonStore.admin_credentials = [];
       if (!jsonStore.notification_settings) jsonStore.notification_settings = {};
     } catch {
       // keep default
@@ -1224,6 +1237,93 @@ export const db = {
         persistJsonStore();
       }
     }
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // Persistent Administrator Credentials Store
+  // ─────────────────────────────────────────────────────────────
+  getAdminCredential(username = 'admin') {
+    if (sqliteDb) {
+      try {
+        const row = sqliteDb.prepare('SELECT * FROM admin_credentials WHERE username = ? LIMIT 1').get(username);
+        if (!row) return null;
+        return {
+          id: row.id,
+          username: row.username,
+          passwordHash: row.password_hash,
+          salt: row.salt,
+          mustChangePassword: Boolean(row.must_change_password),
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      } catch (err) {
+        return null;
+      }
+    } else {
+      const cred = (jsonStore.admin_credentials || []).find((c) => c.username === username);
+      if (!cred) return null;
+      return {
+        id: cred.id,
+        username: cred.username,
+        passwordHash: cred.password_hash || cred.passwordHash,
+        salt: cred.salt,
+        mustChangePassword: Boolean(cred.must_change_password ?? cred.mustChangePassword),
+        createdAt: cred.created_at || cred.createdAt,
+        updatedAt: cred.updated_at || cred.updatedAt,
+      };
+    }
+  },
+
+  saveAdminCredential({ username = 'admin', passwordHash, salt, mustChangePassword = false, updatedAt = null }) {
+    if (!passwordHash || !salt) return null;
+    const now = new Date().toISOString();
+    const updateTime = updatedAt || now;
+    const id = `admin_${username}`;
+    const mustChangeVal = mustChangePassword ? 1 : 0;
+
+    if (sqliteDb) {
+      try {
+        // Prevent stale synchronization from overwriting newer database records
+        const existing = sqliteDb.prepare('SELECT updated_at FROM admin_credentials WHERE username = ?').get(username);
+        if (existing?.updated_at && updateTime < existing.updated_at) {
+          return this.getAdminCredential(username);
+        }
+
+        sqliteDb.prepare(`
+          INSERT INTO admin_credentials (id, username, password_hash, salt, must_change_password, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(username) DO UPDATE SET
+            password_hash = excluded.password_hash,
+            salt = excluded.salt,
+            must_change_password = excluded.must_change_password,
+            updated_at = excluded.updated_at
+        `).run(id, username, passwordHash, salt, mustChangeVal, now, updateTime);
+      } catch (err) {
+        console.warn('[DB] Failed to save admin credentials to SQLite:', err.message);
+      }
+    } else {
+      if (!jsonStore.admin_credentials) jsonStore.admin_credentials = [];
+      const idx = jsonStore.admin_credentials.findIndex((c) => c.username === username);
+      if (idx >= 0 && jsonStore.admin_credentials[idx].updated_at && updateTime < jsonStore.admin_credentials[idx].updated_at) {
+        return this.getAdminCredential(username);
+      }
+      const record = {
+        id,
+        username,
+        password_hash: passwordHash,
+        salt,
+        must_change_password: mustChangeVal,
+        created_at: idx >= 0 ? (jsonStore.admin_credentials[idx].created_at || now) : now,
+        updated_at: updateTime,
+      };
+      if (idx >= 0) {
+        jsonStore.admin_credentials[idx] = record;
+      } else {
+        jsonStore.admin_credentials.push(record);
+      }
+      persistJsonStore();
+    }
+    return this.getAdminCredential(username);
   },
 
   // ─────────────────────────────────────────────────────────────
