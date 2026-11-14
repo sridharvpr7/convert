@@ -648,8 +648,9 @@ async function runTests() {
   });
 
   await testAsync('Telegram: POST /api/auth/app-open respects 15-minute deduplication', async () => {
+    const dedupUserId = `usr_dedup_test_${Date.now()}`;
     const mock1 = mockRequest('POST', '/api/auth/app-open', {
-      userId: 'usr_dedup_test',
+      userId: dedupUserId,
       name: 'Bob Tester',
       email: 'bob@example.com',
     });
@@ -660,7 +661,7 @@ async function runTests() {
 
     // Second call within 15 minutes must be deduplicated
     const mock2 = mockRequest('POST', '/api/auth/app-open', {
-      userId: 'usr_dedup_test',
+      userId: dedupUserId,
       name: 'Bob Tester',
       email: 'bob@example.com',
     });

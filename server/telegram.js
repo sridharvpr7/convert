@@ -11,24 +11,94 @@
 
 import { db } from './db.js';
 
-// Environment variables
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const ADMIN_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
-const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
-const APP_URL = process.env.APP_URL || 'https://convetpulse.onrender.com';
+// Environment variables (dynamically resolved to allow live config / test env / backward compatibility with Render names)
+export const getBotToken = () =>
+  (process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '').trim();
+export const getAdminChatId = () =>
+  (process.env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.ADMIN_CHAT_ID || '').trim();
+export const getWebhookSecret = () =>
+  (process.env.TELEGRAM_WEBHOOK_SECRET || process.env.WEBHOOK_SECRET || '').trim();
 
-// Cache to prevent duplicate notifications (e.g. repeated starts within 30s)
+// Canonical production HTTPS URL
+export const PRODUCTION_URL = 'https://convetpulse.onrender.com';
+
+/**
+ * Returns a validated production-safe HTTPS Dashboard URL
+ */
+export function getDashboardUrl() {
+  const envUrl = (process.env.APP_URL || '').trim();
+  if (!envUrl) return PRODUCTION_URL;
+
+  // In production, reject localhost or non-https URLs
+  if (process.env.NODE_ENV === 'production') {
+    if (envUrl.includes('localhost') || envUrl.startsWith('http://') || !envUrl.startsWith('https://')) {
+      return PRODUCTION_URL;
+    }
+  }
+
+  try {
+    const parsed = new URL(envUrl);
+    if (parsed.protocol === 'https:' || (parsed.protocol === 'http:' && process.env.NODE_ENV !== 'production')) {
+      return envUrl.replace(/\/+$/, '');
+    }
+  } catch {
+    // Malformed URL, use production fallback
+  }
+
+  return PRODUCTION_URL;
+}
+
+/**
+ * Returns the authenticated Admin Console URL
+ */
+export function getAdminDashboardUrl() {
+  return `${getDashboardUrl()}/admin`;
+}
+
+/**
+ * Builds standard Telegram inline_keyboard containing the validated "🌐 View Dashboard" button
+ */
+export function createDashboardKeyboard(extraRows = []) {
+  const url = getDashboardUrl();
+  const primaryRow = [{ text: '🌐 View Dashboard', url }];
+  const keyboard = [primaryRow];
+
+  if (Array.isArray(extraRows) && extraRows.length > 0) {
+    for (const row of extraRows) {
+      if (Array.isArray(row) && row.length > 0) {
+        keyboard.push(row);
+      }
+    }
+  }
+
+  return { inline_keyboard: keyboard };
+}
+
+// In-process cache for sub-second high-concurrency requests, backed by persistent DB dedupe
 const dedupeCache = new Map();
 const DEDUPE_TTL_MS = 30000;
 
-function isDuplicate(key, ttlMs = DEDUPE_TTL_MS) {
+export function clearDedupeKey(key) {
+  if (!key) return;
+  dedupeCache.delete(key);
+  if (db && typeof db.clearDedupe === 'function') {
+    db.clearDedupe(key);
+  }
+}
+
+export function isDuplicate(key, ttlMs = DEDUPE_TTL_MS, eventType = '', entityId = '') {
+  // 1. Check persistent SQLite/JSON store deduplication (survives restarts)
+  if (db && typeof db.checkAndSetDedupe === 'function') {
+    return db.checkAndSetDedupe(key, ttlMs, eventType, entityId);
+  }
+
+  // 2. Fallback to in-process memory map
   const now = Date.now();
   if (dedupeCache.has(key)) {
     const ts = dedupeCache.get(key);
     if (now - ts < ttlMs) return true;
   }
   dedupeCache.set(key, now);
-  // Clean up cache periodically
   if (dedupeCache.size > 2000) {
     for (const [k, v] of dedupeCache.entries()) {
       if (now - v > ttlMs) dedupeCache.delete(k);
@@ -77,27 +147,49 @@ function formatSize(bytes) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Low-level Telegram sendMessage API with retry logic and database audit logging
-async function sendTelegramMessage(chatId, text, options = {}, eventType = 'custom') {
-  const targetChatId = chatId || ADMIN_CHAT_ID;
+export async function sendTelegramMessage(chatId, text, options = {}, eventType = 'custom') {
+  const botToken = getBotToken();
+  const targetChatId = chatId || getAdminChatId();
 
-  if (!BOT_TOKEN || !targetChatId) {
+  if (!botToken || !targetChatId) {
     console.log('[Telegram Mock] (No TELEGRAM_BOT_TOKEN/CHAT_ID set) ->', text.slice(0, 100).replace(/\n/g, ' '));
     db.addNotificationLog({
       eventType,
       status: 'mocked',
       chatId: targetChatId || 'none',
-      errorMessage: !BOT_TOKEN ? 'TELEGRAM_BOT_TOKEN not configured' : 'TELEGRAM_CHAT_ID not configured',
+      errorMessage: !botToken ? 'TELEGRAM_BOT_TOKEN not configured' : 'TELEGRAM_CHAT_ID not configured',
     });
-    return { ok: true, mocked: true, message_id: Math.floor(Math.random() * 100000) };
+    return { ok: true, mocked: true, message_id: null, status: 'mocked' };
   }
 
-  const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
+  // Validate and sanitize inline keyboard URLs before dispatching
+  const replyMarkup = options.replyMarkup ? JSON.parse(JSON.stringify(options.replyMarkup)) : undefined;
+  if (replyMarkup?.inline_keyboard) {
+    for (const row of replyMarkup.inline_keyboard) {
+      if (Array.isArray(row)) {
+        for (const btn of row) {
+          if (btn.url && typeof btn.url === 'string') {
+            try {
+              const parsed = new URL(btn.url);
+              if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+                btn.url = getDashboardUrl();
+              }
+            } catch {
+              btn.url = getDashboardUrl();
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
   const body = {
     chat_id: targetChatId,
     text,
     parse_mode: options.parseMode || 'HTML',
     disable_web_page_preview: options.disablePreview ?? true,
-    reply_markup: options.replyMarkup,
+    reply_markup: replyMarkup,
   };
 
   const maxRetries = options.maxRetries ?? 3;
@@ -109,6 +201,7 @@ async function sendTelegramMessage(chatId, text, options = {}, eventType = 'cust
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(options.timeoutMs || 10000),
       });
 
       const data = await res.json();
@@ -120,15 +213,22 @@ async function sendTelegramMessage(chatId, text, options = {}, eventType = 'cust
           messageId: data.result?.message_id,
           retryCount: attempt - 1,
         });
-        return data;
+        return { ok: true, mocked: false, message_id: data.result?.message_id, status: 'sent', result: data.result };
       }
 
       lastError = data.description || 'Unknown Telegram API error';
       console.warn(`[Telegram Attempt ${attempt}/${maxRetries} Error]:`, lastError);
 
-      // Don't retry client errors like chat not found or bot blocked
-      if (data.error_code === 400 || data.error_code === 403) {
+      // Don't retry permanent client/auth errors (bad request, unauthorized bot token, or bot blocked)
+      if (data.error_code === 400 || data.error_code === 401 || data.error_code === 403) {
         break;
+      }
+
+      // Rate limit (429) backoff
+      if (data.error_code === 429) {
+        const retryAfter = data.parameters?.retry_after || 2;
+        await sleep(retryAfter * 1000);
+        continue;
       }
     } catch (err) {
       lastError = err.message;
@@ -137,7 +237,7 @@ async function sendTelegramMessage(chatId, text, options = {}, eventType = 'cust
 
     if (attempt < maxRetries) {
       // Exponential backoff: 1s, 2s, 4s...
-      await sleep(attempt * 1000);
+      await sleep(Math.pow(2, attempt - 1) * 1000);
     }
   }
 
@@ -150,7 +250,7 @@ async function sendTelegramMessage(chatId, text, options = {}, eventType = 'cust
     retryCount: maxRetries,
   });
 
-  return { ok: false, error: lastError };
+  return { ok: false, mocked: false, error: lastError, status: 'failed' };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -158,15 +258,15 @@ async function sendTelegramMessage(chatId, text, options = {}, eventType = 'cust
 // ─────────────────────────────────────────────────────────────
 export const telegramService = {
   isConfigured() {
-    return Boolean(BOT_TOKEN && ADMIN_CHAT_ID);
+    return Boolean(getBotToken() && getAdminChatId());
   },
 
   getPublicStatus() {
     return {
-      configured: Boolean(BOT_TOKEN && ADMIN_CHAT_ID),
-      hasToken: Boolean(BOT_TOKEN),
-      hasChatId: Boolean(ADMIN_CHAT_ID),
-      hasSecret: Boolean(WEBHOOK_SECRET),
+      configured: Boolean(getBotToken() && getAdminChatId()),
+      hasToken: Boolean(getBotToken()),
+      hasChatId: Boolean(getAdminChatId()),
+      hasSecret: Boolean(getWebhookSecret()),
     };
   },
 
@@ -174,23 +274,26 @@ export const telegramService = {
    * Diagnostic Check: verify bot token with Telegram /getMe endpoint
    */
   async getDiagnostics() {
+    const botToken = getBotToken();
+    const adminChatId = getAdminChatId();
+    const webhookSecret = getWebhookSecret();
     const base = {
-      configured: Boolean(BOT_TOKEN && ADMIN_CHAT_ID),
-      hasToken: Boolean(BOT_TOKEN),
-      hasChatId: Boolean(ADMIN_CHAT_ID),
-      hasSecret: Boolean(WEBHOOK_SECRET),
+      configured: Boolean(botToken && adminChatId),
+      hasToken: Boolean(botToken),
+      hasChatId: Boolean(adminChatId),
+      hasSecret: Boolean(webhookSecret),
       botInfo: null,
       apiReachable: false,
       lastError: null,
     };
 
-    if (!BOT_TOKEN) {
+    if (!botToken) {
       base.lastError = 'TELEGRAM_BOT_TOKEN environment variable is not configured.';
       return base;
     }
 
     try {
-      const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getMe`);
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
       const data = await res.json();
       if (data.ok) {
         base.apiReachable = true;
@@ -210,41 +313,113 @@ export const telegramService = {
   },
 
   /**
-   * New User Notification
+   * New Visitor Notification (Deduplicated with 24h window)
+   */
+  async notifyNewVisitor({ visitorId, page = 'Homepage', isAuthenticated = false, userId = null }) {
+    const settings = db.getNotificationSettings();
+    if (settings.notify_new_visitor === false) return false;
+
+    const dedupeKey = `visitor_new_${visitorId}`;
+    if (isDuplicate(dedupeKey, 24 * 60 * 60 * 1000, 'new_visitor', visitorId)) {
+      return false;
+    }
+
+    const timeStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    const shortId = visitorId ? (visitorId.length > 12 ? visitorId.slice(0, 12) + '...' : visitorId) : 'anon';
+    const visitorType = isAuthenticated ? 'Authenticated Visitor' : 'Anonymous Visitor';
+
+    const msg = [
+      '🚀 <b>CONVET PULSE — NEW VISITOR</b>',
+      '',
+      `👤 <b>Visitor:</b> ${escapeHtml(visitorType)}`,
+      `🌐 <b>Page:</b> ${escapeHtml(page)}`,
+      `🕒 <b>Time:</b> ${timeStr}`,
+      `🆔 <b>Visitor ID:</b> <code>${escapeHtml(shortId)}</code>`,
+      '',
+      '📊 <b>VISITOR ACTIVITY</b>',
+      '• New visitor detected',
+      '• Session status: Active',
+    ].join('\n');
+
+    const replyMarkup = createDashboardKeyboard();
+    const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'new_visitor');
+    if (!res || !res.ok) {
+      clearDedupeKey(dedupeKey);
+    }
+    db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'new_visitor', visitorId: shortId });
+    return res;
+  },
+
+  /**
+   * Returning Visitor Notification (Configurable & Deduplicated with cooldown)
+   */
+  async notifyReturningVisitor({ visitorId, page = 'Homepage', pageViews = 2, isAuthenticated = false }) {
+    const settings = db.getNotificationSettings();
+    if (settings.notify_returning_visitor !== true) return false;
+
+    const cooldownMinutes = Number(settings.visitor_cooldown_minutes) || 30;
+    const cooldownMs = cooldownMinutes * 60 * 1000;
+    const dedupeKey = `visitor_return_${visitorId}`;
+
+    if (isDuplicate(dedupeKey, cooldownMs, 'returning_visitor', visitorId)) {
+      return false;
+    }
+
+    const timeStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    const shortId = visitorId ? (visitorId.length > 12 ? visitorId.slice(0, 12) + '...' : visitorId) : 'anon';
+
+    const msg = [
+      '🔄 <b>CONVET PULSE — RETURNING VISITOR</b>',
+      '',
+      `👤 <b>Visitor:</b> ${isAuthenticated ? 'Authenticated Visitor' : 'Returning Visitor'}`,
+      `🌐 <b>Page:</b> ${escapeHtml(page)}`,
+      `🕒 <b>Time:</b> ${timeStr}`,
+      `🆔 <b>Visitor ID:</b> <code>${escapeHtml(shortId)}</code>`,
+      `📄 <b>Total Pageviews:</b> ${pageViews}`,
+    ].join('\n');
+
+    const replyMarkup = createDashboardKeyboard();
+    const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'returning_visitor');
+    if (!res || !res.ok) {
+      clearDedupeKey(dedupeKey);
+    }
+    return res;
+  },
+
+  /**
+   * New User Registration Notification
    */
   async notifyNewUser(user) {
     const settings = db.getNotificationSettings();
-    if (!settings.notify_new_user) return;
+    if (!settings.notify_new_user) return false;
 
-    const dedupeKey = `user_${user.id}`;
-    if (isDuplicate(dedupeKey)) return;
+    const entityId = user.email || user.id;
+    const dedupeKey = `user_reg_${entityId}`;
+    if (isDuplicate(dedupeKey, 24 * 60 * 60 * 1000, 'user_registered', entityId)) {
+      return false;
+    }
 
-    const dateStr = new Date().toLocaleDateString('en-GB', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    });
+    const timeStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    const displayName = user.name || 'Registered User';
+    const emailDisplay = user.email ? escapeHtml(user.email) : '<i>Not provided</i>';
 
     const msg = [
-      '🟢 <b>NEW CONVET USER</b>',
+      '👤 <b>NEW USER REGISTRATION</b>',
       '',
-      `👤 <b>User:</b> ${escapeHtml(user.name || 'Anonymous User')}`,
-      `🆔 <b>User ID:</b> <code>${escapeHtml(user.id)}</code>`,
-      `📧 <b>Email:</b> ${user.email ? escapeHtml(user.email) : '<i>Not provided</i>'}`,
-      `🌐 <b>Platform:</b> CONVET PULSE`,
-      `📅 <b>Joined:</b> ${dateStr}`,
-      `📱 <b>Device:</b> ${escapeHtml(user.deviceInfo || 'Desktop')}`,
-      `🔗 <b>Event:</b> New User Registration`,
+      `👤 <b>Name:</b> ${escapeHtml(displayName)}`,
+      `📧 <b>Email:</b> ${emailDisplay}`,
+      `🕒 <b>Time:</b> ${timeStr}`,
+      'ℹ️ <b>Account Status:</b> Active',
+      '🌐 <b>Platform:</b> CONVET PULSE',
     ].join('\n');
 
-    const replyMarkup = {
-      inline_keyboard: [
-        [{ text: '📊 Open Dashboard', url: `${APP_URL}/admin` }],
-      ],
-    };
-
-    await sendTelegramMessage(ADMIN_CHAT_ID, msg, { replyMarkup }, 'new_user');
-    db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'new_user', userId: user.id });
+    const replyMarkup = createDashboardKeyboard();
+    const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'user_registered');
+    if (!res || !res.ok) {
+      clearDedupeKey(dedupeKey);
+    }
+    db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'user_registered', userId: user.id });
+    return res;
   },
 
   /**
@@ -255,7 +430,7 @@ export const telegramService = {
     if (settings.notify_user_login === false) return;
 
     const dedupeKey = `login_${user.id}_${Math.floor(Date.now() / 60000)}`;
-    if (isDuplicate(dedupeKey, 60000)) return;
+    if (isDuplicate(dedupeKey, 60000, 'user_login', user.id)) return;
 
     const timeStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
     const userDisplay = user.name || user.displayName || 'User';
@@ -268,10 +443,14 @@ export const telegramService = {
       `📧 <b>Email:</b> ${escapeHtml(emailDisplay)}`,
       `🔑 <b>Provider:</b> ${escapeHtml(provider)}`,
       `🕒 <b>Time:</b> ${timeStr}`,
-      `ℹ️ <b>Status:</b> User authenticated successfully.`,
+      'ℹ️ <b>Status:</b> User authenticated successfully.',
     ].join('\n');
 
-    await sendTelegramMessage(ADMIN_CHAT_ID, msg, {}, 'user_login');
+    const replyMarkup = createDashboardKeyboard();
+    const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'user_login');
+    if (!res || !res.ok) {
+      clearDedupeKey(dedupeKey);
+    }
     db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'user_login', userId: user.id });
   },
 
@@ -284,7 +463,7 @@ export const telegramService = {
 
     // Deduplicate per user for 15 minutes (900,000 ms)
     const dedupeKey = `app_open_${user.id}`;
-    if (isDuplicate(dedupeKey, 15 * 60 * 1000)) return false;
+    if (isDuplicate(dedupeKey, 15 * 60 * 1000, 'app_open', user.id)) return false;
 
     const timeStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
     const userDisplay = user.name || user.displayName || 'User';
@@ -296,10 +475,14 @@ export const telegramService = {
       `👤 <b>User:</b> ${escapeHtml(userDisplay)}`,
       `📧 <b>Email:</b> ${escapeHtml(emailDisplay)}`,
       `🕒 <b>Time:</b> ${timeStr}`,
-      `ℹ️ <b>Status:</b> Authenticated user opened the application.`,
+      'ℹ️ <b>Status:</b> Authenticated user opened the application.',
     ].join('\n');
 
-    await sendTelegramMessage(ADMIN_CHAT_ID, msg, {}, 'app_open');
+    const replyMarkup = createDashboardKeyboard();
+    const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'app_open');
+    if (!res || !res.ok) {
+      clearDedupeKey(dedupeKey);
+    }
     db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'app_open', userId: user.id });
     return true;
   },
@@ -309,24 +492,40 @@ export const telegramService = {
    */
   async notifyPaymentReceived(payment) {
     const settings = db.getNotificationSettings();
-    if (settings.notify_payment_received === false) return;
+    if (settings.notify_payment_received === false) return false;
+
+    const dedupeKey = `payment_success_${payment.order_id || payment.id}`;
+    if (isDuplicate(dedupeKey, 86400 * 1000, 'payment_success', payment.order_id)) {
+      return false;
+    }
 
     const timeStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-    const amountInRupees = typeof payment.amount === 'number' && payment.amount > 1000 ? (payment.amount / 100).toFixed(0) : payment.amount;
+    const amountVal = typeof payment.amount === 'number' && payment.amount > 1000
+      ? (payment.amount / 100).toFixed(0)
+      : payment.amount;
+
+    const userDisplay = payment.user_email || payment.userId || payment.user_id || 'Customer';
+    const planName = (payment.plan || 'PREMIUM PRO').toUpperCase();
+    const orderRef = payment.order_id || payment.orderId || 'N/A';
 
     const msg = [
-      '⭐ <b>CONVET PULSE — Premium Payment Received</b>',
+      '💳 <b>PAYMENT SUCCESSFUL</b>',
       '',
-      `👤 <b>User:</b> ${escapeHtml(payment.user_email || payment.user_id)}`,
-      `💳 <b>Order ID:</b> <code>${escapeHtml(payment.order_id)}</code>`,
-      `💰 <b>Amount:</b> ₹${amountInRupees} ${escapeHtml(payment.currency || 'INR')}`,
-      `⭐ <b>Plan:</b> ${escapeHtml(payment.plan ? payment.plan.toUpperCase() : 'PREMIUM PRO')}`,
+      `👤 <b>User:</b> ${escapeHtml(userDisplay)}`,
+      `⭐ <b>Plan:</b> ${escapeHtml(planName)}`,
+      `💰 <b>Amount:</b> ₹${amountVal} ${escapeHtml(payment.currency || 'INR')}`,
+      `💳 <b>Reference:</b> <code>${escapeHtml(orderRef)}</code>`,
       `🕒 <b>Time:</b> ${timeStr}`,
-      `✅ <b>Status:</b> Verified & Premium Entitlement Activated`,
+      '✅ <b>Status:</b> Verified & Activated',
     ].join('\n');
 
-    await sendTelegramMessage(ADMIN_CHAT_ID, msg, {}, 'payment_received');
-    db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'payment_received', orderId: payment.order_id });
+    const replyMarkup = createDashboardKeyboard();
+    const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'payment_success');
+    if (!res || !res.ok) {
+      clearDedupeKey(dedupeKey);
+    }
+    db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'payment_success', orderId: orderRef });
+    return res;
   },
 
   /**
@@ -337,7 +536,7 @@ export const telegramService = {
     if (!settings.notify_conversion_started) return;
 
     const dedupeKey = `start_${job.id}`;
-    if (isDuplicate(dedupeKey)) return;
+    if (isDuplicate(dedupeKey, 60000, 'conversion_started', job.id)) return;
 
     const timeStr = new Date().toLocaleTimeString('en-US', {
       hour: '2-digit',
@@ -349,74 +548,67 @@ export const telegramService = {
       '⚙️ <b>CONVERSION STARTED</b>',
       '',
       `👤 <b>User:</b> ${escapeHtml(job.userName || 'Anonymous User')}`,
-      `🔧 <b>Tool:</b> ${escapeHtml(job.toolName)}`,
+      `🔧 <b>Tool:</b> ${escapeHtml(job.toolName || job.tool_name)}`,
       `📂 <b>Input:</b> ${escapeHtml(job.inputFileName || 'file')}`,
       `📤 <b>Output:</b> ${escapeHtml(job.outputFormat ? `.${job.outputFormat}` : 'Pending')}`,
-      `📦 <b>File Size:</b> ${formatSize(job.inputFileSize)}`,
+      `📦 <b>File Size:</b> ${formatSize(job.inputFileSize || job.file_size_bytes)}`,
       `🕒 <b>Started:</b> ${timeStr}`,
       `🆔 <b>Job ID:</b> <code>${escapeHtml(job.id)}</code>`,
     ].join('\n');
 
-    const replyMarkup = {
-      inline_keyboard: [
-        [
-          { text: '🔍 Check Status', callback_data: `status:${job.id}` },
-          { text: '💬 Add Comment', callback_data: `comment:${job.id}` },
-        ],
+    const replyMarkup = createDashboardKeyboard([
+      [
+        { text: '🔍 Check Status', callback_data: `status:${job.id}` },
+        { text: '💬 Add Comment', callback_data: `comment:${job.id}` },
       ],
-    };
+    ]);
 
-    const res = await sendTelegramMessage(ADMIN_CHAT_ID, msg, { replyMarkup }, 'conversion_started');
+    const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'conversion_started');
+    if (!res || !res.ok) {
+      clearDedupeKey(dedupeKey);
+    }
     db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'conversion_started', jobId: job.id });
     return res;
   },
 
   /**
-   * Conversion Completed Notification (Clean, Human-Readable, Usage-Aware)
+   * Conversion Completed Notification
    */
   async notifyConversionCompleted(job, usageStats = null) {
     const settings = db.getNotificationSettings();
-    if (!settings.notify_conversion_completed) return;
+    if (!settings.notify_conversion_completed) return false;
 
     const dedupeKey = `complete_${job.id}`;
-    if (isDuplicate(dedupeKey)) return;
-
-    // Human-readable action description without exposing internal slugs or raw operation IDs
-    const actionDesc = getHumanReadableAction(job.toolSlug || job.tool_slug, job.toolName);
-
-    // Verified User Identity
-    let userDisplay = 'Verified User';
-    if (job.userName && job.userName !== 'Anonymous User') {
-      userDisplay = job.userEmail ? `${job.userName} (${job.userEmail})` : job.userName;
-    } else if (job.userEmail) {
-      userDisplay = job.userEmail;
-    } else {
-      userDisplay = 'Anonymous User';
+    if (isDuplicate(dedupeKey, 3600 * 1000, 'conversion_completed', job.id)) {
+      return false;
     }
 
-    const actionCount = usageStats?.actionCount ?? 1;
-    const totalCount = usageStats?.totalUserCount ?? 1;
+    const durationSec = typeof job.durationMs === 'number'
+      ? (job.durationMs / 1000).toFixed(1)
+      : typeof job.duration_ms === 'number'
+      ? (job.duration_ms / 1000).toFixed(1)
+      : '1.0';
+
+    const inputFormat = job.inputFormat || (job.inputFileName ? job.inputFileName.split('.').pop() : 'file');
+    const outputFormat = job.outputFormat || (job.outputFileName ? job.outputFileName.split('.').pop() : 'converted');
     const timeStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 
     const msg = [
-      '✅ <b>CONVET PULSE — Task Completed</b>',
+      '✅ <b>CONVERSION COMPLETED</b>',
       '',
-      `👤 <b>User:</b> ${escapeHtml(userDisplay)}`,
-      `⚡ <b>Action:</b> ${escapeHtml(actionDesc)}`,
-      `🎯 <b>This Action:</b> ${actionCount} successful completion${actionCount === 1 ? '' : 's'}`,
-      `📈 <b>Overall Usage:</b> ${totalCount} successful completion${totalCount === 1 ? '' : 's'}`,
+      `🔧 <b>Tool:</b> ${escapeHtml(job.toolName || job.tool_name || 'File Converter')}`,
+      `📂 <b>Input Format:</b> .${escapeHtml(inputFormat.replace(/^\./, ''))}`,
+      `📤 <b>Output Format:</b> .${escapeHtml(outputFormat.replace(/^\./, ''))}`,
+      `⏱ <b>Duration:</b> ${durationSec}s`,
       `🕒 <b>Time:</b> ${timeStr}`,
+      '📊 <b>Status:</b> Success',
     ].join('\n');
 
-    const replyMarkup = {
-      inline_keyboard: [
-        [
-          { text: '📊 Admin Dashboard', url: `${APP_URL}/admin` },
-        ],
-      ],
-    };
-
-    const res = await sendTelegramMessage(ADMIN_CHAT_ID, msg, { replyMarkup }, 'conversion_completed');
+    const replyMarkup = createDashboardKeyboard();
+    const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'conversion_completed');
+    if (!res || !res.ok) {
+      clearDedupeKey(dedupeKey);
+    }
     db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'conversion_completed', jobId: job.id });
     return res;
   },
@@ -429,15 +621,15 @@ export const telegramService = {
     if (!settings.notify_conversion_failed) return;
 
     const dedupeKey = `fail_${job.id}`;
-    if (isDuplicate(dedupeKey)) return;
+    if (isDuplicate(dedupeKey, 60000, 'conversion_failed', job.id)) return;
 
-    const durationSec = ((job.durationMs || 1000) / 1000).toFixed(1);
+    const durationSec = ((job.durationMs || job.duration_ms || 1000) / 1000).toFixed(1);
 
     const msg = [
       '❌ <b>CONVERSION FAILED</b>',
       '',
       `👤 <b>User:</b> ${escapeHtml(job.userName || 'Anonymous User')}`,
-      `🔧 <b>Tool:</b> ${escapeHtml(job.toolName)}`,
+      `🔧 <b>Tool:</b> ${escapeHtml(job.toolName || job.tool_name)}`,
       `🆔 <b>Job ID:</b> <code>${escapeHtml(job.id)}</code>`,
       `⚠️ <b>Error Category:</b> ${escapeHtml(job.errorCategory || 'Processing Error')}`,
       `📋 <b>Summary:</b> ${escapeHtml(job.errorSummary || 'File processing could not be completed.')}`,
@@ -445,16 +637,16 @@ export const telegramService = {
       `🔄 <b>Retry Status:</b> Eligible for client retry`,
     ].join('\n');
 
-    const replyMarkup = {
-      inline_keyboard: [
-        [
-          { text: '🔍 Inspect Job', url: `${APP_URL}/admin?job=${job.id}` },
-          { text: '💬 Add Comment', callback_data: `comment:${job.id}` },
-        ],
+    const replyMarkup = createDashboardKeyboard([
+      [
+        { text: '💬 Add Comment', callback_data: `comment:${job.id}` },
       ],
-    };
+    ]);
 
-    const res = await sendTelegramMessage(ADMIN_CHAT_ID, msg, { replyMarkup }, 'conversion_failed');
+    const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'conversion_failed');
+    if (!res || !res.ok) {
+      clearDedupeKey(dedupeKey);
+    }
     db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'conversion_failed', jobId: job.id });
     return res;
   },
@@ -467,7 +659,7 @@ export const telegramService = {
     if (!settings.notify_conversion_failed) return;
 
     const dedupeKey = `file_err_${toolName}_${fileName}`;
-    if (isDuplicate(dedupeKey)) return;
+    if (isDuplicate(dedupeKey, 60000, 'file_processing_error', `${toolName}_${fileName}`)) return;
 
     const msg = [
       '⚠️ <b>FILE PROCESSING ERROR</b>',
@@ -478,7 +670,11 @@ export const telegramService = {
       `🕒 <b>Time:</b> ${new Date().toISOString()}`,
     ].join('\n');
 
-    await sendTelegramMessage(ADMIN_CHAT_ID, msg, {}, 'file_processing_error');
+    const replyMarkup = createDashboardKeyboard();
+    const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'file_processing_error');
+    if (!res || !res.ok) {
+      clearDedupeKey(dedupeKey);
+    }
     db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'file_processing_error', toolName, fileName });
   },
 
@@ -490,7 +686,7 @@ export const telegramService = {
     if (!settings.notify_premium_access) return;
 
     const dedupeKey = `prem_acc_${user?.id || 'anon'}_${toolName}`;
-    if (isDuplicate(dedupeKey)) return;
+    if (isDuplicate(dedupeKey, 60000, 'premium_access', `${user?.id}_${toolName}`)) return;
 
     const msg = [
       '⭐ <b>PREMIUM TOOL ACCESSED</b>',
@@ -501,7 +697,11 @@ export const telegramService = {
       `🕒 <b>Time:</b> ${new Date().toLocaleString()}`,
     ].join('\n');
 
-    await sendTelegramMessage(ADMIN_CHAT_ID, msg, {}, 'premium_tool_access');
+    const replyMarkup = createDashboardKeyboard();
+    const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'premium_tool_access');
+    if (!res || !res.ok) {
+      clearDedupeKey(dedupeKey);
+    }
     db.addAuditLog('telegram_notification', 'TelegramBot', { event: 'premium_access', toolName, userId: user?.id });
   },
 
@@ -520,29 +720,45 @@ export const telegramService = {
       `🕒 <b>Timestamp:</b> ${new Date().toLocaleString()}`,
     ].join('\n');
 
-    await sendTelegramMessage(ADMIN_CHAT_ID, msg, {}, 'admin_config_change');
+    const replyMarkup = createDashboardKeyboard();
+    await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'admin_config_change');
   },
 
   /**
-   * Important System Error Notification
+   * System Error Notification (Sanitized safe diagnostics without secrets)
    */
   async notifySystemError(error, context = 'Server') {
     const settings = db.getNotificationSettings();
-    if (!settings.notify_system_errors) return;
+    if (!settings.notify_system_errors) return false;
 
-    const dedupeKey = `sys_err_${error?.message || 'unknown'}`;
-    if (isDuplicate(dedupeKey)) return;
+    const rawMsg = error?.message || String(error);
+    // Sanitize: take primary error line and truncate to 150 chars (no tokens or secrets)
+    const safeDiagnostic = rawMsg.split('\n')[0].slice(0, 150);
+
+    const dedupeKey = `sys_err_${context}_${safeDiagnostic}`;
+    if (isDuplicate(dedupeKey, 5 * 60 * 1000, 'system_error', context)) return false;
+
+    const timeStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 
     const msg = [
-      '🚨 <b>SYSTEM ERROR DETECTED</b>',
+      '⚠️ <b>SYSTEM ALERT</b>',
       '',
-      `🌐 <b>Context:</b> ${escapeHtml(context)}`,
-      `⚠️ <b>Message:</b> ${escapeHtml(error?.message || String(error))}`,
-      `🕒 <b>Timestamp:</b> ${new Date().toISOString()}`,
+      `🌐 <b>Component:</b> ${escapeHtml(context)}`,
+      `⚠️ <b>Category:</b> System Exception`,
+      `🕒 <b>Time:</b> ${timeStr}`,
+      `📋 <b>Details:</b> ${escapeHtml(safeDiagnostic)}`,
     ].join('\n');
 
-    await sendTelegramMessage(ADMIN_CHAT_ID, msg, {}, 'system_error');
-    db.addAuditLog('telegram_notification', 'System', { event: 'system_error', context, error: error?.message });
+    // Include both the public Dashboard button and the direct Admin Console button for fast administrative triage
+    const replyMarkup = createDashboardKeyboard([
+      [{ text: '🔐 Admin Console', url: `${getDashboardUrl()}/admin` }],
+    ]);
+    const res = await sendTelegramMessage(getAdminChatId(), msg, { replyMarkup }, 'system_error');
+    if (!res || !res.ok) {
+      clearDedupeKey(dedupeKey);
+    }
+    db.addAuditLog('telegram_notification', 'System', { event: 'system_error', context, error: safeDiagnostic });
+    return res;
   },
 
   /**
@@ -554,18 +770,20 @@ export const telegramService = {
       '',
       'Your Telegram notification integration is working properly!',
       `📅 <b>Timestamp:</b> ${new Date().toISOString()}`,
-      `🌐 <b>Target:</b> Admin Chat <code>${ADMIN_CHAT_ID || 'Local Mock'}</code>`,
+      `🌐 <b>Target:</b> Admin Chat <code>${getAdminChatId() || 'Local Mock'}</code>`,
       `⚙️ <b>Server:</b> CONVET PULSE Production Platform`,
     ].join('\n');
 
-    return sendTelegramMessage(ADMIN_CHAT_ID, testMsg, {}, 'test_alert');
+    const replyMarkup = createDashboardKeyboard();
+    return sendTelegramMessage(getAdminChatId(), testMsg, { replyMarkup }, 'test_alert');
   },
 
   // ─────────────────────────────────────────────────────────────
   // Telegram Bot Webhook & Admin Command System
   // ─────────────────────────────────────────────────────────────
   async handleWebhookUpdate(update, secretHeader) {
-    if (WEBHOOK_SECRET && secretHeader !== WEBHOOK_SECRET) {
+    const webhookSecret = getWebhookSecret();
+    if (webhookSecret && secretHeader !== webhookSecret) {
       console.warn('[Telegram Webhook] Invalid secret token header received');
       return { status: 403, error: 'Unauthorized webhook request' };
     }
@@ -581,7 +799,8 @@ export const telegramService = {
     const userId = String(message.from?.id || '');
     const userDisplayName = message.from?.first_name || 'Admin';
 
-    if (ADMIN_CHAT_ID && chatId !== ADMIN_CHAT_ID && userId !== ADMIN_CHAT_ID) {
+    const adminChatId = getAdminChatId();
+    if (adminChatId && chatId !== adminChatId && userId !== adminChatId) {
       console.warn(`[Telegram Webhook] Unauthorized access attempt from chatId: ${chatId}, userId: ${userId}`);
       await sendTelegramMessage(chatId, '⛔ <b>Unauthorized:</b> You do not have administrator permissions for this CONVET instance.');
       return { status: 200, message: 'Unauthorized sender' };
@@ -624,9 +843,12 @@ export const telegramService = {
         '• <code>/stats</code> — View platform conversion analytics',
         '• <code>/help</code> — Show this manual',
         '',
-        `🌐 Dashboard: <a href="${APP_URL}/admin">${APP_URL}/admin</a>`,
+        `🌐 Dashboard: <a href="${getDashboardUrl()}">${getDashboardUrl()}</a>`,
       ].join('\n');
-      await sendTelegramMessage(chatId, welcome);
+      const replyMarkup = createDashboardKeyboard([
+        [{ text: '📊 Admin Console', url: `${getDashboardUrl()}/admin` }],
+      ]);
+      await sendTelegramMessage(chatId, welcome, { replyMarkup });
       return { status: 200, message: 'Start handled' };
     }
 
@@ -645,7 +867,8 @@ export const telegramService = {
         '• Reply directly to any conversion alert to add a comment.',
         '• Use inline buttons beneath alerts for one-tap actions.',
       ].join('\n');
-      await sendTelegramMessage(chatId, help);
+      const replyMarkup = createDashboardKeyboard();
+      await sendTelegramMessage(chatId, help, { replyMarkup });
       return { status: 200, message: 'Help handled' };
     }
 
@@ -653,13 +876,13 @@ export const telegramService = {
       const parts = text.split(/\s+/);
       const jobId = parts[1];
       if (!jobId) {
-        await sendTelegramMessage(chatId, '⚠️ Please specify a Job ID. Example:\n<code>/status JOB-12345</code>');
+        await sendTelegramMessage(chatId, '⚠️ Please specify a Job ID. Example:\n<code>/status JOB-12345</code>', { replyMarkup: createDashboardKeyboard() });
         return { status: 200 };
       }
 
       const job = db.getJobById(jobId);
       if (!job) {
-        await sendTelegramMessage(chatId, `❌ Job <code>${escapeHtml(jobId)}</code> not found.`);
+        await sendTelegramMessage(chatId, `❌ Job <code>${escapeHtml(jobId)}</code> not found.`, { replyMarkup: createDashboardKeyboard() });
         return { status: 200 };
       }
 
@@ -675,13 +898,10 @@ export const telegramService = {
         `📅 <b>Created:</b> ${new Date(job.created_at).toLocaleString()}`,
       ].join('\n');
 
-      await sendTelegramMessage(chatId, msg, {
-        replyMarkup: {
-          inline_keyboard: [
-            [{ text: '🔍 View Details', url: `${APP_URL}/admin?job=${job.id}` }],
-          ],
-        },
-      });
+      const replyMarkup = createDashboardKeyboard([
+        [{ text: '🔍 View Details', url: `${getDashboardUrl()}/admin?job=${job.id}` }],
+      ]);
+      await sendTelegramMessage(chatId, msg, { replyMarkup });
       return { status: 200 };
     }
 
@@ -689,13 +909,13 @@ export const telegramService = {
       const parts = text.split(/\s+/);
       const jobId = parts[1];
       if (!jobId) {
-        await sendTelegramMessage(chatId, '⚠️ Please specify a Job ID. Example:\n<code>/job JOB-12345</code>');
+        await sendTelegramMessage(chatId, '⚠️ Please specify a Job ID. Example:\n<code>/job JOB-12345</code>', { replyMarkup: createDashboardKeyboard() });
         return { status: 200 };
       }
 
       const job = db.getJobById(jobId);
       if (!job) {
-        await sendTelegramMessage(chatId, `❌ Job <code>${escapeHtml(jobId)}</code> not found.`);
+        await sendTelegramMessage(chatId, `❌ Job <code>${escapeHtml(jobId)}</code> not found.`, { replyMarkup: createDashboardKeyboard() });
         return { status: 200 };
       }
 
@@ -719,16 +939,13 @@ export const telegramService = {
         commentsText,
       ].join('\n');
 
-      await sendTelegramMessage(chatId, msg, {
-        replyMarkup: {
-          inline_keyboard: [
-            [
-              { text: '💬 Add Comment', callback_data: `comment:${job.id}` },
-              { text: '📊 Admin Dashboard', url: `${APP_URL}/admin?job=${job.id}` },
-            ],
-          ],
-        },
-      });
+      const replyMarkup = createDashboardKeyboard([
+        [
+          { text: '💬 Add Comment', callback_data: `comment:${job.id}` },
+          { text: '📊 Admin Dashboard', url: `${getDashboardUrl()}/admin?job=${job.id}` },
+        ],
+      ]);
+      await sendTelegramMessage(chatId, msg, { replyMarkup });
       return { status: 200 };
     }
 
@@ -740,14 +957,15 @@ export const telegramService = {
       if (!jobId || !commentBody) {
         await sendTelegramMessage(
           chatId,
-          '⚠️ Usage: <code>/comment &lt;JOB-ID&gt; &lt;your comment&gt;</code>\nExample:\n<code>/comment JOB-12345 Output verified successfully.</code>'
+          '⚠️ Usage: <code>/comment &lt;JOB-ID&gt; &lt;your comment&gt;</code>\nExample:\n<code>/comment JOB-12345 Output verified successfully.</code>',
+          { replyMarkup: createDashboardKeyboard() }
         );
         return { status: 200 };
       }
 
       const job = db.getJobById(jobId);
       if (!job) {
-        await sendTelegramMessage(chatId, `❌ Cannot comment: Job <code>${escapeHtml(jobId)}</code> was not found.`);
+        await sendTelegramMessage(chatId, `❌ Cannot comment: Job <code>${escapeHtml(jobId)}</code> was not found.`, { replyMarkup: createDashboardKeyboard() });
         return { status: 200 };
       }
 
@@ -760,7 +978,8 @@ export const telegramService = {
 
       await sendTelegramMessage(
         chatId,
-        `✅ <b>Comment recorded for ${escapeHtml(jobId)}:</b>\n"${escapeHtml(commentBody)}"`
+        `✅ <b>Comment recorded for ${escapeHtml(jobId)}:</b>\n"${escapeHtml(commentBody)}"`,
+        { replyMarkup: createDashboardKeyboard() }
       );
       db.addAuditLog('telegram_admin_command_comment', userDisplayName, { jobId });
       return { status: 200 };
@@ -769,7 +988,7 @@ export const telegramService = {
     if (text.startsWith('/recent')) {
       const recentJobs = db.listJobs({ limit: 5 });
       if (recentJobs.length === 0) {
-        await sendTelegramMessage(chatId, 'ℹ️ No conversion jobs recorded yet.');
+        await sendTelegramMessage(chatId, 'ℹ️ No conversion jobs recorded yet.', { replyMarkup: createDashboardKeyboard() });
         return { status: 200 };
       }
 
@@ -779,7 +998,7 @@ export const telegramService = {
       });
 
       const msg = ['🕒 <b>LAST 5 CONVERSIONS:</b>', '', ...lines].join('\n');
-      await sendTelegramMessage(chatId, msg);
+      await sendTelegramMessage(chatId, msg, { replyMarkup: createDashboardKeyboard() });
       return { status: 200 };
     }
 
@@ -800,13 +1019,10 @@ export const telegramService = {
         ...stats.toolUsage.slice(0, 5).map((t, i) => `${i + 1}. ${escapeHtml(t.tool_name)}: ${t.count} runs`),
       ].join('\n');
 
-      await sendTelegramMessage(chatId, msg, {
-        replyMarkup: {
-          inline_keyboard: [
-            [{ text: '🖥 Full Admin Dashboard', url: `${APP_URL}/admin` }],
-          ],
-        },
-      });
+      const replyMarkup = createDashboardKeyboard([
+        [{ text: '🖥 Full Admin Dashboard', url: `${getDashboardUrl()}/admin` }],
+      ]);
+      await sendTelegramMessage(chatId, msg, { replyMarkup });
       return { status: 200 };
     }
 

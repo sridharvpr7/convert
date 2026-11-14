@@ -170,6 +170,14 @@ function initSqliteTables(db) {
       created_at TEXT NOT NULL,
       paid_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS notification_dedupe (
+      dedupe_key TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      entity_id TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
   `);
 
   // 2. Safe migrations for existing databases
@@ -203,9 +211,13 @@ function initSqliteTables(db) {
   runMigration('CREATE INDEX IF NOT EXISTS idx_usage_events_event ON usage_events(event_id)');
   runMigration('CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments(order_id)');
   runMigration('CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id)');
+  runMigration('CREATE INDEX IF NOT EXISTS idx_dedupe_expires ON notification_dedupe(expires_at)');
 
   // 4. Initialize default notification settings if empty
   const defaultSettings = [
+    ['notify_new_visitor', 'true'],
+    ['notify_returning_visitor', 'false'],
+    ['visitor_cooldown_minutes', '30'],
     ['notify_new_user', 'true'],
     ['notify_user_login', 'true'],
     ['notify_app_open', 'true'],
@@ -239,7 +251,11 @@ let jsonStore = {
   user_usage: [],
   usage_events: [],
   payments: [],
+  notification_dedupe: [],
   notification_settings: {
+    notify_new_visitor: 'true',
+    notify_returning_visitor: 'false',
+    visitor_cooldown_minutes: '30',
     notify_new_user: 'true',
     notify_user_login: 'true',
     notify_app_open: 'true',
@@ -259,9 +275,12 @@ function initJsonStore() {
     try {
       jsonStore = JSON.parse(fs.readFileSync(JSON_FALLBACK_PATH, 'utf8'));
       if (!jsonStore.jobs) jsonStore.jobs = [];
+      if (!jsonStore.users) jsonStore.users = [];
       if (!jsonStore.visitors) jsonStore.visitors = [];
       if (!jsonStore.premium_entitlements) jsonStore.premium_entitlements = [];
       if (!jsonStore.notification_logs) jsonStore.notification_logs = [];
+      if (!jsonStore.notification_dedupe) jsonStore.notification_dedupe = [];
+      if (!jsonStore.notification_settings) jsonStore.notification_settings = {};
     } catch {
       // keep default
     }
@@ -560,7 +579,7 @@ export const db = {
 
   // --- Real Visitor Analytics ---
   recordVisitor({ id, isAuthenticated = false, userId = null }) {
-    if (!id) return;
+    if (!id) return { isNew: false, pageViews: 0 };
     const now = new Date().toISOString();
 
     if (sqliteDb) {
@@ -574,11 +593,13 @@ export const db = {
             last_seen_at = ?
           WHERE id = ?
         `).run(isAuthenticated ? 1 : 0, userId, now, id);
+        return { isNew: false, pageViews: (existing.page_views || 1) + 1 };
       } else {
         sqliteDb.prepare(`
           INSERT INTO visitors (id, is_authenticated, user_id, page_views, first_seen_at, last_seen_at)
           VALUES (?, ?, ?, 1, ?, ?)
         `).run(id, isAuthenticated ? 1 : 0, userId, now, now);
+        return { isNew: true, pageViews: 1 };
       }
     } else {
       const idx = jsonStore.visitors.findIndex((v) => v.id === id);
@@ -587,6 +608,8 @@ export const db = {
         jsonStore.visitors[idx].last_seen_at = now;
         if (isAuthenticated) jsonStore.visitors[idx].is_authenticated = 1;
         if (userId) jsonStore.visitors[idx].user_id = userId;
+        persistJsonStore();
+        return { isNew: false, pageViews: jsonStore.visitors[idx].page_views };
       } else {
         jsonStore.visitors.push({
           id,
@@ -596,8 +619,9 @@ export const db = {
           first_seen_at: now,
           last_seen_at: now,
         });
+        persistJsonStore();
+        return { isNew: true, pageViews: 1 };
       }
-      persistJsonStore();
     }
   },
 
@@ -1062,6 +1086,10 @@ export const db = {
     }
   },
 
+  getNotificationLogs(limit = 50) {
+    return this.listNotificationLogs({ limit });
+  },
+
   getNotificationStats() {
     const isLiveConfigured = Boolean(process.env.TELEGRAM_BOT_TOKEN);
     if (sqliteDb) {
@@ -1086,17 +1114,24 @@ export const db = {
 
   // --- Notification Settings ---
   getNotificationSettings() {
+    const parseVal = (v) => {
+      if (v === 'true') return true;
+      if (v === 'false') return false;
+      if (v !== '' && !isNaN(Number(v))) return Number(v);
+      return v;
+    };
+
     if (sqliteDb) {
       const rows = sqliteDb.prepare('SELECT key, value FROM notification_settings').all();
       const settings = {};
       for (const row of rows) {
-        settings[row.key] = row.value === 'true';
+        settings[row.key] = parseVal(row.value);
       }
       return settings;
     } else {
       const settings = {};
-      for (const [k, v] of Object.entries(jsonStore.notification_settings)) {
-        settings[k] = v === 'true';
+      for (const [k, v] of Object.entries(jsonStore.notification_settings || {})) {
+        settings[k] = parseVal(v);
       }
       return settings;
     }
@@ -1112,12 +1147,83 @@ export const db = {
         stmt.run(k, String(v));
       }
     } else {
+      if (!jsonStore.notification_settings) jsonStore.notification_settings = {};
       for (const [k, v] of Object.entries(updates)) {
         jsonStore.notification_settings[k] = String(v);
       }
       persistJsonStore();
     }
     return this.getNotificationSettings();
+  },
+
+  // --- Persistent Notification Deduplication ---
+  checkAndSetDedupe(dedupeKey, ttlMs = 30000, eventType = '', entityId = '') {
+    if (!dedupeKey) return false;
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
+
+    if (sqliteDb) {
+      try {
+        // 1. Opportunistically clear expired entries
+        sqliteDb.prepare('DELETE FROM notification_dedupe WHERE expires_at < ?').run(nowIso);
+
+        // 2. Query for existing entry
+        const existing = sqliteDb.prepare('SELECT dedupe_key, expires_at FROM notification_dedupe WHERE dedupe_key = ?').get(dedupeKey);
+        if (existing) {
+          if (existing.expires_at >= nowIso) {
+            return true; // Duplicate! Active lock
+          }
+          // Expired, renew lock
+          sqliteDb.prepare('UPDATE notification_dedupe SET expires_at = ?, created_at = ?, event_type = ?, entity_id = ? WHERE dedupe_key = ?')
+            .run(expiresAt, nowIso, eventType, entityId, dedupeKey);
+          return false; // Renewed
+        }
+
+        // 3. Atomically insert new key
+        sqliteDb.prepare('INSERT INTO notification_dedupe (dedupe_key, event_type, entity_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)')
+          .run(dedupeKey, eventType, entityId, nowIso, expiresAt);
+        return false; // Claimed
+      } catch (err) {
+        if (err.message && err.message.includes('UNIQUE constraint failed')) {
+          return true; // Caught concurrent duplicate
+        }
+        return false;
+      }
+    } else {
+      if (!jsonStore.notification_dedupe) jsonStore.notification_dedupe = [];
+      // Clean up expired entries
+      jsonStore.notification_dedupe = jsonStore.notification_dedupe.filter(
+        (item) => item.expires_at >= nowIso
+      );
+
+      const existing = jsonStore.notification_dedupe.find((item) => item.dedupe_key === dedupeKey);
+      if (existing) {
+        return true; // Duplicate
+      }
+
+      jsonStore.notification_dedupe.push({
+        dedupe_key: dedupeKey,
+        event_type: eventType,
+        entity_id: entityId,
+        created_at: nowIso,
+        expires_at: expiresAt,
+      });
+      persistJsonStore();
+      return false; // Claimed
+    }
+  },
+
+  clearDedupe(dedupeKey) {
+    if (!dedupeKey) return;
+    if (sqliteDb) {
+      sqliteDb.prepare('DELETE FROM notification_dedupe WHERE dedupe_key = ?').run(dedupeKey);
+    } else {
+      if (jsonStore.notification_dedupe) {
+        jsonStore.notification_dedupe = jsonStore.notification_dedupe.filter((item) => item.dedupe_key !== dedupeKey);
+        persistJsonStore();
+      }
+    }
   },
 
   // ─────────────────────────────────────────────────────────────

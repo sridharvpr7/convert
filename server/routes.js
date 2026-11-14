@@ -184,11 +184,35 @@ export async function handleApiRoute(req, res, url) {
   if (pathname === '/api/visitors/ping' && method === 'POST') {
     const body = await readBody();
     if (body?.visitorId) {
-      db.recordVisitor({
+      const page = body.page || 'Homepage';
+      const result = db.recordVisitor({
         id: body.visitorId,
         isAuthenticated: Boolean(body.isAuthenticated),
         userId: body.userId || null,
       });
+
+      if (result.isNew) {
+        // Genuinely new visitor (deduplicated for 24 hours)
+        telegramService.notifyNewVisitor({
+          visitorId: body.visitorId,
+          page,
+          isAuthenticated: Boolean(body.isAuthenticated),
+          userId: body.userId || null,
+        }).catch((err) => {
+          console.error('[API] notifyNewVisitor failed:', err.message);
+        });
+      } else {
+        // Returning visitor (only sent if notify_returning_visitor is enabled, with cooldown)
+        telegramService.notifyReturningVisitor({
+          visitorId: body.visitorId,
+          page,
+          pageViews: result.pageViews,
+          isAuthenticated: Boolean(body.isAuthenticated),
+          userId: body.userId || null,
+        }).catch((err) => {
+          console.error('[API] notifyReturningVisitor failed:', err.message);
+        });
+      }
     }
     return sendJson(200, { ok: true });
   }
@@ -1122,7 +1146,8 @@ export async function handleApiRoute(req, res, url) {
     const body = await readBody();
     const result = db.registerUser(body || {});
 
-    if (result.isNew) {
+    // Only notify when an actual user with verified email or non-anonymous name registers
+    if (result.isNew && body?.email && body.name !== 'Anonymous User') {
       telegramService.notifyNewUser(result.user).catch((err) => {
         console.error('[API] notifyNewUser failed:', err.message);
       });
