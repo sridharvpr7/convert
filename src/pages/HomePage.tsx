@@ -1,34 +1,133 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowRight, Sparkles, Upload, Zap, Shield, Globe, Cpu,
   FileText, Image, Table,
   Archive, CheckCircle2, Star, ChevronRight,
-  Play, Layers, RefreshCw, Lock,
+  Play, Layers, RefreshCw, Lock, Boxes, WifiOff, ShieldCheck,
 } from 'lucide-react';
 import { CATEGORY_META, getPopularTools, getNewTools, TOOLS } from '@/registry/tools';
 import { useAppStore } from '@/store/app.store';
 import { apiClient } from '@/lib/api';
+import { loadHistory } from '@/lib/history';
+
+// ────────────────────────────────────────────────
+// Accessible Count-Up Animation Component
+// ────────────────────────────────────────────────
+interface AnimatedCounterProps {
+  value: number;
+  duration?: number;
+}
+
+const AnimatedCounter: React.FC<AnimatedCounterProps> = ({ value, duration = 900 }) => {
+  const [displayValue, setDisplayValue] = useState<number>(0);
+  const elementRef = useRef<HTMLSpanElement>(null);
+  const [hasStarted, setHasStarted] = useState<boolean>(false);
+
+  useEffect(() => {
+    // Respect accessibility motion preference
+    if (typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setDisplayValue(value);
+      return;
+    }
+
+    if (typeof IntersectionObserver === 'undefined') {
+      setDisplayValue(value);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setHasStarted(true);
+        }
+      },
+      { threshold: 0.15 }
+    );
+
+    const el = elementRef.current;
+    if (el) {
+      observer.observe(el);
+    }
+
+    return () => {
+      if (el) observer.unobserve(el);
+      observer.disconnect();
+    };
+  }, [value]);
+
+  useEffect(() => {
+    if (!hasStarted) return;
+    if (value === 0) {
+      setDisplayValue(0);
+      return;
+    }
+
+    let startTime: number | null = null;
+    let animationFrameId: number;
+
+    const animate = (timestamp: number) => {
+      if (!startTime) startTime = timestamp;
+      const elapsed = timestamp - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      // Ease out quartic for smooth deceleration
+      const ease = 1 - Math.pow(1 - progress, 4);
+      setDisplayValue(Math.round(ease * value));
+
+      if (progress < 1) {
+        animationFrameId = requestAnimationFrame(animate);
+      }
+    };
+
+    animationFrameId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [hasStarted, value, duration]);
+
+  return <span ref={elementRef}>{displayValue.toLocaleString()}</span>;
+};
 
 // ────────────────────────────────────────────────
 // Hero Section
 // ────────────────────────────────────────────────
 const HeroSection: React.FC = () => {
-  const { setSearchOpen, setSearchQuery } = useAppStore();
+  const { setSearchOpen, setSearchQuery, siteDisplayConfig } = useAppStore();
   const [aiInput, setAiInput] = useState('');
-  const [processedCount, setProcessedCount] = useState<number | null>(null);
+  const [lifetimeCount, setLifetimeCount] = useState<number>(0);
+  const [sessionCount, setSessionCount] = useState<number>(0);
 
   useEffect(() => {
-    apiClient.getAdminStats().then((res) => {
-      if (res && typeof res.completedJobs === 'number') {
-        setProcessedCount(res.completedJobs);
-      } else {
-        setProcessedCount(0);
-      }
-    }).catch(() => {
-      setProcessedCount(0);
-    });
+    // 1. Session conversions from local storage history
+    const history = loadHistory();
+    const completedSessionJobs = history.filter((h) => h.status === 'completed').length;
+    setSessionCount(completedSessionJobs);
+
+    // 2. Verified lifetime conversions from API analytics
+    apiClient
+      .getAnalyticsSummary()
+      .then((res) => {
+        if (res && typeof res.completedJobs === 'number') {
+          setLifetimeCount(res.completedJobs);
+        } else {
+          return apiClient.getAdminStats();
+        }
+      })
+      .then((adminStats) => {
+        if (adminStats && typeof adminStats.completedJobs === 'number') {
+          setLifetimeCount(adminStats.completedJobs);
+        }
+      })
+      .catch(() => {
+        setLifetimeCount(0);
+      });
   }, []);
+
+  const enabledTools = TOOLS.filter(
+    (tool) => siteDisplayConfig?.tools?.[tool.slug]?.enabled !== false
+  );
+  const totalToolsCount = enabledTools.length;
+  const offlineToolsCount = enabledTools.filter((t) => t.offlineSupported).length;
+  const categoryCount = Object.keys(CATEGORY_META).length;
+  const offlinePercentage = totalToolsCount > 0 ? Math.round((offlineToolsCount / totalToolsCount) * 100) : 100;
 
   const examplePrompts = [
     'Merge multiple PDF documents',
@@ -83,7 +182,7 @@ const HeroSection: React.FC = () => {
             }}
           >
             <Sparkles size={14} />
-            <span>{TOOLS.length} Essential Tools · 100% Client-Side Privacy</span>
+            <span>{totalToolsCount} Essential Tools · 100% Client-Side Privacy</span>
             <span
               className="w-1.5 h-1.5 rounded-full animate-pulse"
               style={{ backgroundColor: 'var(--accent)' }}
@@ -193,24 +292,171 @@ const HeroSection: React.FC = () => {
           </div>
         </div>
 
-        {/* Real Metrics — Verified Data Only */}
-        <div className="flex items-center justify-center gap-8 mt-10 flex-wrap">
-          {[
-            { label: 'Tools Available', value: `${TOOLS.length}` },
-            { label: 'Offline Support', value: '100% Ready' },
-            { label: 'Files Processed', value: processedCount !== null ? `${processedCount}` : '0' },
-            { label: 'Privacy First', value: 'Client-Side' },
-          ].map((m) => (
-            <div key={m.label} className="flex flex-col items-center gap-1">
-              <span className="text-2xl font-bold font-num" style={{ color: 'var(--accent)' }}>
-                {m.value}
-              </span>
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                {m.label}
-              </span>
+        {/* Real Metrics — Dynamic & Verified Data Only */}
+        {siteDisplayConfig?.homepage?.showStatistics !== false && (
+          <div className="w-full max-w-5xl mx-auto mt-14">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Card 1: Tools Available */}
+              <div
+                className="glass-card glow-border group relative rounded-2xl p-5 transition-all duration-300 hover:-translate-y-1 shadow-cv-sm"
+                style={{
+                  borderColor: 'var(--border)',
+                }}
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <div
+                    className="w-10 h-10 rounded-xl flex items-center justify-center transition-transform duration-300 group-hover:scale-110"
+                    style={{
+                      backgroundColor: 'rgba(91, 106, 248, 0.12)',
+                      color: 'var(--accent)',
+                    }}
+                  >
+                    <Boxes size={20} />
+                  </div>
+                  <span
+                    className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-wide"
+                    style={{
+                      backgroundColor: 'rgba(91, 106, 248, 0.1)',
+                      color: 'var(--accent)',
+                      border: '1px solid rgba(91, 106, 248, 0.2)',
+                    }}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    Verified
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-3xl font-extrabold font-num text-primary tracking-tight">
+                    <AnimatedCounter value={totalToolsCount} />
+                  </div>
+                  <div className="text-sm font-semibold text-primary">Tools Available</div>
+                  <div className="text-xs text-muted-cv">
+                    Across {categoryCount} Verified Categories
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 2: Offline Support */}
+              <div
+                className="glass-card glow-border group relative rounded-2xl p-5 transition-all duration-300 hover:-translate-y-1 shadow-cv-sm"
+                style={{
+                  borderColor: 'var(--border)',
+                }}
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <div
+                    className="w-10 h-10 rounded-xl flex items-center justify-center transition-transform duration-300 group-hover:scale-110"
+                    style={{
+                      backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                      color: '#10b981',
+                    }}
+                  >
+                    <WifiOff size={20} />
+                  </div>
+                  <span
+                    className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-wide"
+                    style={{
+                      backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                      color: '#10b981',
+                      border: '1px solid rgba(16, 185, 129, 0.2)',
+                    }}
+                  >
+                    {offlinePercentage}% Ready
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-3xl font-extrabold font-num text-primary tracking-tight flex items-baseline">
+                    <AnimatedCounter value={offlineToolsCount} />
+                    <span className="text-lg font-bold text-muted-cv ml-1">/ {totalToolsCount}</span>
+                    <span className="text-xs font-semibold ml-2 text-emerald-500">Local</span>
+                  </div>
+                  <div className="text-sm font-semibold text-primary">Offline Supported</div>
+                  <div className="text-xs text-muted-cv">
+                    In-Browser Privacy Sandbox
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 3: Files Processed */}
+              <div
+                className="glass-card glow-border group relative rounded-2xl p-5 transition-all duration-300 hover:-translate-y-1 shadow-cv-sm"
+                style={{
+                  borderColor: 'var(--border)',
+                }}
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <div
+                    className="w-10 h-10 rounded-xl flex items-center justify-center transition-transform duration-300 group-hover:scale-110"
+                    style={{
+                      backgroundColor: 'rgba(59, 130, 246, 0.12)',
+                      color: '#3b82f6',
+                    }}
+                  >
+                    <CheckCircle2 size={20} />
+                  </div>
+                  <span
+                    className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-wide"
+                    style={{
+                      backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                      color: '#3b82f6',
+                      border: '1px solid rgba(59, 130, 246, 0.2)',
+                    }}
+                  >
+                    Session: {sessionCount}
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-3xl font-extrabold font-num text-primary tracking-tight">
+                    <AnimatedCounter value={lifetimeCount} />
+                  </div>
+                  <div className="text-sm font-semibold text-primary">Files Processed</div>
+                  <div className="text-xs text-muted-cv">
+                    {sessionCount > 0 ? `Session: ${sessionCount} · ` : ''}Lifetime Verified
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 4: Privacy Architecture */}
+              <div
+                className="glass-card glow-border group relative rounded-2xl p-5 transition-all duration-300 hover:-translate-y-1 shadow-cv-sm"
+                style={{
+                  borderColor: 'var(--border)',
+                }}
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <div
+                    className="w-10 h-10 rounded-xl flex items-center justify-center transition-transform duration-300 group-hover:scale-110"
+                    style={{
+                      backgroundColor: 'rgba(168, 85, 247, 0.12)',
+                      color: '#a855f7',
+                    }}
+                  >
+                    <ShieldCheck size={20} />
+                  </div>
+                  <span
+                    className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-wide"
+                    style={{
+                      backgroundColor: 'rgba(168, 85, 247, 0.1)',
+                      color: '#a855f7',
+                      border: '1px solid rgba(168, 85, 247, 0.2)',
+                    }}
+                  >
+                    Zero-Log
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-3xl font-extrabold text-primary tracking-tight">
+                    Client-Side
+                  </div>
+                  <div className="text-sm font-semibold text-primary">Privacy Architecture</div>
+                  <div className="text-xs text-muted-cv">
+                    Zero Cloud File Storage
+                  </div>
+                </div>
+              </div>
             </div>
-          ))}
-        </div>
+          </div>
+        )}
       </div>
     </section>
   );
