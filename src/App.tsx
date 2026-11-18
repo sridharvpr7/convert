@@ -4,7 +4,9 @@ import {
   Routes,
   Route,
   useLocation,
+  useNavigate,
 } from 'react-router-dom';
+import { isTauri, isAndroid } from '@/lib/platform';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, toAppUser } from '@/lib/firebase';
@@ -55,6 +57,36 @@ const ScrollToTop: React.FC = () => {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
   }, [pathname]);
+  return null;
+};
+
+// ─────────────────────────────────────────────────────────
+// Android hardware back-button listener (Tauri mobile integration)
+// ─────────────────────────────────────────────────────────
+const MobileNavigationHandler: React.FC = () => {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    if (isTauri() && isAndroid()) {
+      import('@tauri-apps/api/event')
+        .then(({ listen }) => {
+          return listen('tauri://back-button', () => {
+            if (window.history.length > 1) {
+              navigate(-1);
+            }
+          });
+        })
+        .then((fn) => {
+          unlisten = fn;
+        })
+        .catch(() => {});
+    }
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [navigate]);
+
   return null;
 };
 
@@ -207,6 +239,7 @@ const AppRoutes: React.FC = () => {
   return (
     <Suspense fallback={<PageSkeleton />}>
       <ScrollToTop />
+      <MobileNavigationHandler />
       <CommandPalette />
       <NotificationsPanel />
 

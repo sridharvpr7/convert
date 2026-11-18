@@ -11,6 +11,7 @@
 import { PDFDocument, PDFName, PDFNumber } from 'pdf-lib';
 import type { ProcessorResult } from './processors.ts';
 import { ProcessorError, toBlobPart } from './processors.ts';
+import { getApiBaseUrl } from './platform.ts';
 
 // ─────────────────────────────────────────────────────────
 // Web Streams Deflate / Inflate Helpers (Standard Browser APIs)
@@ -89,7 +90,7 @@ export async function pdfPasswordProtect(
       }
       const fileBase64 = btoa(binary);
 
-      const response = await fetch('/api/pdf/encrypt', {
+      const response = await fetch(`${getApiBaseUrl()}/api/pdf/encrypt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -163,7 +164,7 @@ export async function pdfUnlock(
       }
       const fileBase64 = btoa(binary);
 
-      const response = await fetch('/api/pdf/decrypt', {
+      const response = await fetch(`${getApiBaseUrl()}/api/pdf/decrypt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

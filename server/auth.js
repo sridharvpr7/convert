@@ -389,7 +389,12 @@ function buildClearCookie() {
  */
 export function requireAdmin(req) {
   const cookies = parseCookies(req);
-  const token = cookies.conveter_session;
+  const token =
+    cookies.conveter_session ||
+    req.headers['x-admin-token'] ||
+    (typeof req.headers.authorization === 'string'
+      ? req.headers.authorization.replace(/^Bearer\s+/i, '')
+      : null);
   return validateSession(token);
 }
 

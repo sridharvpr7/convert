@@ -5,3 +5,4 @@ config
 *.tsbuildinfo
 .env*
 !.env.example
+target/
