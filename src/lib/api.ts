@@ -4,6 +4,8 @@
 // Resilient: gracefully handles offline / static-only environments.
 // ============================================================
 
+import { getApiBaseUrl } from './platform';
+
 export interface ApiJob {
   id: string;
   userId?: string;
@@ -249,15 +251,22 @@ export interface TelegramDiagnostics {
   lastError?: string | null;
 }
 
-const API_BASE = '';
+const API_BASE = getApiBaseUrl();
 
 async function safeFetch<T>(endpoint: string, options: RequestInit = {}): Promise<T | null> {
   try {
+    const adminToken = typeof localStorage !== 'undefined' ? localStorage.getItem('cv_admin_token') : null;
+    const authHeaders: Record<string, string> = {};
+    if (adminToken) {
+      authHeaders['X-Admin-Token'] = adminToken;
+    }
+
     const res = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
       credentials: 'include', // Pass cookies for session authentication
       headers: {
         'Content-Type': 'application/json',
+        ...authHeaders,
         ...(options.headers || {}),
       },
     });

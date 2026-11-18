@@ -15,6 +15,7 @@ import {
 import type { ProcessorResult } from '@/lib/processors';
 import { useToast } from '@/components/ui/ToastContext';
 import { apiClient } from '@/lib/api';
+import { nativeSaveFile } from '@/lib/platform';
 
 export interface DownloadFileItem {
   id: string;
@@ -126,7 +127,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
     ? Math.round((bytesSaved / totalOriginalSize) * 100)
     : 0;
 
-  // Single file download
+  // Single file download (Native in Tauri, Blob in Web)
   const handleDownload = async (item: typeof flattenedOutputs[0]) => {
     setDownloadingId(item.id);
 
@@ -135,17 +136,11 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
         apiClient.trackDownload(item.jobId).catch(() => {});
       }
 
-      const url = URL.createObjectURL(item.outputBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = item.outputName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-
-      setDownloadedIds((prev) => new Set([...prev, item.id]));
-      toast.success('Download started', item.outputName);
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      const res = await nativeSaveFile(item.outputBlob, item.outputName);
+      if (res.success) {
+        setDownloadedIds((prev) => new Set([...prev, item.id]));
+        toast.success('Download started', item.outputName);
+      }
     } catch {
       toast.error('Download failed', 'Unable to initiate file download.');
     } finally {
@@ -167,20 +162,15 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
       }
 
       const zipBlob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(zipBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `conveter_${toolName.toLowerCase().replace(/\s+/g, '_')}_batch.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      const filename = `conveter_${toolName.toLowerCase().replace(/\s+/g, '_')}_batch.zip`;
+      const res = await nativeSaveFile(zipBlob, filename);
 
-      flattenedOutputs.forEach((item) => {
-        setDownloadedIds((prev) => new Set([...prev, item.id]));
-      });
-
-      toast.success('Batch ZIP downloaded', `${flattenedOutputs.length} files compressed into ZIP.`);
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      if (res.success) {
+        flattenedOutputs.forEach((item) => {
+          setDownloadedIds((prev) => new Set([...prev, item.id]));
+        });
+        toast.success('Batch ZIP downloaded', `${flattenedOutputs.length} files compressed into ZIP.`);
+      }
     } catch (err: unknown) {
       toast.error('Batch download failed', (err as Error).message || 'Could not assemble ZIP.');
     } finally {

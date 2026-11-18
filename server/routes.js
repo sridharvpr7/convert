@@ -734,6 +734,7 @@ export async function handleApiRoute(req, res, url) {
       200,
       {
         ok: true,
+        token: authResult.token,
         mustChangePassword: authResult.mustChangePassword,
         message: 'Authentication successful',
       },

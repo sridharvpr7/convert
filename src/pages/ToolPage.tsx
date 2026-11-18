@@ -18,6 +18,7 @@ import { DownloadCenter } from '@/components/tools/DownloadCenter';
 import { DeveloperWorkspace } from '@/components/tools/DeveloperWorkspace';
 import { BarcodeWorkspace } from '@/components/tools/BarcodeWorkspace';
 import { apiClient } from '@/lib/api';
+import { nativeSaveFile } from '@/lib/platform';
 
 // ────────────────────────────────────────────────
 // Processing states
@@ -74,17 +75,12 @@ const TOOL_PRESETS: Record<string, { label: string; desc: string; values: Record
 };
 
 // ────────────────────────────────────────────────
-// Utility: download a blob
+// Utility: download a blob (native save dialog in Tauri, HTML download in browser)
 // ────────────────────────────────────────────────
 function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  nativeSaveFile(blob, filename).catch((err) => {
+    console.error('Save failed:', err);
+  });
 }
 
 // ────────────────────────────────────────────────
