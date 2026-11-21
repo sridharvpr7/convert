@@ -11,4 +11,6 @@ target/
 *.key
 keystore.properties
 *.signing-key
+*.pem
+*.crt
 
