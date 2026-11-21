@@ -47,6 +47,20 @@ import {
   isCategoryVisible,
 } from './site-display.js';
 
+// GitHub Releases Cache (10-minute TTL)
+let cachedRelease = null;
+let cachedReleaseExpiresAt = 0;
+function getCachedRelease() {
+  if (cachedRelease && Date.now() < cachedReleaseExpiresAt) {
+    return cachedRelease;
+  }
+  return null;
+}
+function setCachedRelease(data) {
+  cachedRelease = data;
+  cachedReleaseExpiresAt = Date.now() + 10 * 60 * 1000;
+}
+
 export async function handleApiRoute(req, res, url) {
   const method = req.method;
   const pathname = url.pathname;
@@ -227,6 +241,47 @@ export async function handleApiRoute(req, res, url) {
       }
     }
     return sendJson(200, { ok: true });
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // 3b. GitHub Releases Proxy Endpoint (Cached 10-minute TTL)
+  // ─────────────────────────────────────────────────────────
+  if (pathname === '/api/releases/latest' && method === 'GET') {
+    const cached = getCachedRelease();
+    if (cached) {
+      return sendJson(200, cached);
+    }
+
+    try {
+      const response = await fetch('https://api.github.com/repos/sridharvpr7/convert/releases/latest', {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'convetpulse-server',
+        },
+      });
+
+      if (response.status === 404) {
+        const payload = {
+          status: 'no-releases',
+          message: 'No published releases found on GitHub yet.',
+        };
+        setCachedRelease(payload);
+        return sendJson(200, payload);
+      }
+
+      if (!response.ok) {
+        return sendJson(response.status, {
+          error: `GitHub API error: ${response.statusText}`,
+        });
+      }
+
+      const releaseData = await response.json();
+      setCachedRelease(releaseData);
+      return sendJson(200, releaseData);
+    } catch (err) {
+      console.error('[API] Failed to fetch GitHub release:', err.message);
+      return sendJson(502, { error: 'Failed to connect to GitHub Releases API' });
+    }
   }
 
   // ─────────────────────────────────────────────────────────

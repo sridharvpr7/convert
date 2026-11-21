@@ -1,5 +1,4 @@
-
-name: Tauri Windows Release
+name: CONVET PULSE Cross-Platform Release
 
 on:
   push:
@@ -10,7 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  release-windows:
+    name: Build & Release Windows Desktop
     runs-on: windows-latest
 
     steps:
@@ -29,7 +29,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build and release Tauri app
+      - name: Build and release Windows Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -38,7 +38,88 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "CONVET PULSE ${{ github.ref_name }}"
-          releaseBody: "See the assets below to download and update CONVET PULSE."
+          releaseBody: "Official cross-platform release for CONVET PULSE. Download installers below."
           releaseDraft: false
           prerelease: false
           args: --bundles nsis
+
+  release-android:
+    name: Build & Release Android APK
+    needs: release-windows
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check for Android Signing Secrets
+        id: check-secrets
+        run: |
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ] && [ -n "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" ]; then
+            echo "has_secrets=true" >> $GITHUB_OUTPUT
+            echo "Android signing secrets detected."
+          else
+            echo "has_secrets=false" >> $GITHUB_OUTPUT
+            echo "::warning::Android keystore secrets not configured. Skipping signed APK release to prevent distributing unsigned binaries."
+          fi
+
+      - name: Prepare Android Keystore
+        if: steps.check-secrets.outputs.has_secrets == 'true'
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > $RUNNER_TEMP/release.keystore
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> $GITHUB_ENV
+          echo "ANDROID_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
+          echo "ANDROID_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> $GITHUB_ENV
+          echo "ANDROID_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> $GITHUB_ENV
+
+      - name: Build Android Release APK
+        if: steps.check-secrets.outputs.has_secrets == 'true'
+        run: |
+          npx tauri android build --apk
+
+      - name: Verify Signed APK
+        if: steps.check-secrets.outputs.has_secrets == 'true'
+        run: |
+          APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "Error: No release APK found!"
+            exit 1
+          fi
+          echo "Found APK: $APK_PATH"
+          # Verify signature with apksigner
+          $ANDROID_HOME/build-tools/34.0.0/apksigner verify --verbose "$APK_PATH" || \
+          $ANDROID_HOME/build-tools/33.0.1/apksigner verify --verbose "$APK_PATH" || true
+          
+          # Rename to standardized asset name
+          cp "$APK_PATH" "CONVET_PULSE_${{ github.ref_name }}_android.apk"
+          echo "RELEASE_APK_FILE=CONVET_PULSE_${{ github.ref_name }}_android.apk" >> $GITHUB_ENV
+
+      - name: Upload Android APK to GitHub Release
+        if: steps.check-secrets.outputs.has_secrets == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ github.ref_name }} "$RELEASE_APK_FILE" --clobber
