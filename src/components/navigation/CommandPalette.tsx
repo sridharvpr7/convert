@@ -111,8 +111,9 @@ export const CommandPalette: React.FC = () => {
 
       {/* Palette */}
       <div
-        className="fixed z-[201] top-16 left-1/2 -translate-x-1/2 w-full max-w-2xl rounded-xl border animate-scale-in overflow-hidden"
+        className="fixed z-[201] left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-2xl rounded-xl border animate-scale-in overflow-hidden"
         style={{
+          top: 'calc(4.5rem + env(safe-area-inset-top, 0px))',
           backgroundColor: 'var(--surface)',
           borderColor: 'var(--border)',
           boxShadow: 'var(--shadow-lg)',

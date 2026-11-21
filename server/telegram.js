@@ -9,6 +9,7 @@
 // 5. Rate-limiting, deduplication, and webhook secret validation
 // ============================================================
 
+import crypto from 'node:crypto';
 import { db } from './db.js';
 
 // Environment variables (dynamically resolved to allow live config / test env / backward compatibility with Render names)
@@ -853,9 +854,28 @@ export const telegramService = {
   // ─────────────────────────────────────────────────────────────
   async handleWebhookUpdate(update, secretHeader) {
     const webhookSecret = getWebhookSecret();
-    if (webhookSecret && secretHeader !== webhookSecret) {
-      console.warn('[Telegram Webhook] Invalid secret token header received');
-      return { status: 403, error: 'Unauthorized webhook request' };
+    const isProd = process.env.NODE_ENV === 'production' || Boolean(getBotToken());
+
+    // In production or when webhook secret is configured, strictly enforce secret token
+    if (isProd || webhookSecret) {
+      if (!webhookSecret) {
+        console.warn('[Telegram Webhook] Webhook secret not configured in production');
+        return { status: 403, error: 'Telegram webhook secret is not configured in production' };
+      }
+      if (!secretHeader) {
+        console.warn('[Telegram Webhook] Request rejected: Missing webhook secret header');
+        return { status: 403, error: 'Missing Telegram webhook secret token' };
+      }
+
+      // Cryptographically timing-safe comparison without logging secret values
+      const bufExpected = Buffer.from(webhookSecret, 'utf8');
+      const bufReceived = Buffer.from(String(secretHeader), 'utf8');
+      const isValid = bufExpected.length === bufReceived.length && crypto.timingSafeEqual(bufExpected, bufReceived);
+
+      if (!isValid) {
+        console.warn('[Telegram Webhook] Request rejected: Invalid secret token received');
+        return { status: 403, error: 'Unauthorized webhook request' };
+      }
     }
 
     if (update.callback_query) {

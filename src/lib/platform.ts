@@ -32,6 +32,14 @@ export function isWindows(): boolean {
 }
 
 /**
+ * Detects if running on Desktop (Windows / macOS / Linux via Tauri).
+ * Excludes Android and Web browser environments.
+ */
+export function isDesktop(): boolean {
+  return isTauri() && !isAndroid();
+}
+
+/**
  * Detects if running in a standard web browser (not packaged as Tauri app).
  */
 export function isWeb(): boolean {
@@ -164,6 +172,8 @@ export async function sendNativeNotification(title: string, body?: string): Prom
       if (permissionGranted) {
         sendNotification({ title, body: body || '' });
       }
-    } catch {}
+    } catch {
+      // safe ignore in environments where notification plugin is unavailable
+    }
   }
 }

@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import {
   BrowserRouter,
   Routes,
@@ -6,7 +6,9 @@ import {
   useLocation,
   useNavigate,
 } from 'react-router-dom';
-import { isTauri, isAndroid } from '@/lib/platform';
+import { isTauri, isAndroid, isDesktop } from '@/lib/platform';
+import { checkForUpdate, type AppUpdateInfo } from '@/lib/updater';
+import { UpdateModal } from '@/components/updater/UpdateModal';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, toAppUser } from '@/lib/firebase';
@@ -164,8 +166,12 @@ const NotificationsPanel: React.FC = () => {
         aria-hidden
       />
       <div
-        className="fixed top-16 right-4 z-[151] w-80 rounded-xl border shadow-cv-lg animate-slide-down overflow-hidden"
-        style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}
+        className="fixed right-4 z-[151] w-80 max-w-[calc(100vw-2rem)] rounded-xl border shadow-cv-lg animate-slide-down overflow-hidden"
+        style={{
+          top: 'calc(4rem + env(safe-area-inset-top, 0px))',
+          backgroundColor: 'var(--surface)',
+          borderColor: 'var(--border)',
+        }}
       >
         <div
           className="flex items-center justify-between px-4 py-3 border-b"
@@ -408,55 +414,90 @@ const App: React.FC = () => {
   const setPremiumConfig = useAppStore((state) => state.setPremiumConfig);
   const setSiteDisplayConfig = useAppStore((state) => state.setSiteDisplayConfig);
 
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+
+  useEffect(() => {
+    // Check for desktop updates on app launch (silent mode: no disruption if up to date)
+    if (isDesktop()) {
+      checkForUpdate({ silent: true })
+        .then((result) => {
+          if (result.status === 'update-available') {
+            setUpdateInfo(result.update);
+            setShowUpdateModal(true);
+          }
+        })
+        .catch(() => {});
+    }
+  }, []);
+
   useEffect(() => {
     // 1. Fetch live configurations
     apiClient.getPublicPremiumConfig().then(setPremiumConfig).catch(() => {});
     apiClient.getPublicSiteConfig().then(setSiteDisplayConfig).catch(() => {});
 
     // 2. Register visitor / user session
+    // anonymousId persists across page loads as a stable session fingerprint
     let anonymousId = localStorage.getItem('conveter_anon_id');
     if (!anonymousId) {
       anonymousId = `user_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
       localStorage.setItem('conveter_anon_id', anonymousId);
     }
-
+    // Register the anonymous session for DB tracking (no Telegram notification yet —
+    // we wait for onAuthStateChanged so we know if the user is already authenticated
+    // before deciding whether to send an anonymous or authenticated visitor notification)
     try {
       apiClient.registerUser({
         id: anonymousId,
         name: 'Anonymous User',
         deviceInfo: `${navigator.platform || 'Desktop'} · ${navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Desktop'}`,
       }).catch(() => {});
-      apiClient.pingVisitor(anonymousId, false).catch(() => {});
     } catch {
       /* ignore */
     }
 
     if (!auth) {
       setUser(null);
+      // No Firebase — treat as anonymous visitor
+      apiClient.pingVisitor(anonymousId, false).catch(() => {});
       return;
     }
     return onAuthStateChanged(auth, (user) => {
       const appUser = user ? toAppUser(user) : null;
       setUser(appUser);
       if (appUser) {
+        // Authenticated user: register with real identity, ping as authenticated
         apiClient.registerUser({
           id: appUser.id,
           name: appUser.name || 'User',
           email: appUser.email,
           deviceInfo: `${navigator.platform || 'Desktop'}`,
         }).catch(() => {});
+        // Authenticated ping — server skips anonymous visitor notification for auth'd users
         apiClient.pingVisitor(appUser.id, true, appUser.id).catch(() => {});
 
-        // Authenticated app-open notification with 15-minute client-side deduplication
+        // Authenticated app-open notification — suppress if an explicit login/register
+        // notification was just sent (within the last 2 minutes) to avoid double firing
+        const lastLoginNotified = Number(sessionStorage.getItem('conveter_login_notified') || 0);
         const lastAppOpen = Number(sessionStorage.getItem('conveter_last_app_open') || 0);
         const now = Date.now();
-        if (now - lastAppOpen > 15 * 60 * 1000) {
+        const loginJustNotified = now - lastLoginNotified < 2 * 60 * 1000;
+
+        if (!loginJustNotified && now - lastAppOpen > 15 * 60 * 1000) {
           sessionStorage.setItem('conveter_last_app_open', String(now));
           apiClient.notifyAppOpen({
             userId: appUser.id,
             name: appUser.name || 'User',
             email: appUser.email,
           }).catch(() => {});
+        }
+      } else {
+        // User is not authenticated — send anonymous visitor notification once per session
+        const lastAnonPing = Number(sessionStorage.getItem('conveter_anon_ping') || 0);
+        const now = Date.now();
+        if (now - lastAnonPing > 15 * 60 * 1000) {
+          sessionStorage.setItem('conveter_anon_ping', String(now));
+          apiClient.pingVisitor(anonymousId, false).catch(() => {});
         }
       }
     });
@@ -468,6 +509,11 @@ const App: React.FC = () => {
         <BrowserRouter>
           <AppRoutes />
         </BrowserRouter>
+        <UpdateModal
+          isOpen={showUpdateModal}
+          updateInfo={updateInfo}
+          onClose={() => setShowUpdateModal(false)}
+        />
       </ToastProvider>
     </QueryClientProvider>
   );

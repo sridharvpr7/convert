@@ -2,12 +2,16 @@ import React, { useState } from 'react';
 import {
   User, Bell, Shield, Palette, KeyRound, Trash2,
   ChevronRight, Save, CheckCircle2, AlertCircle, LogIn,
+  RefreshCw,
 } from 'lucide-react';
 import { ThemeSwitcher } from '@/components/ui/ThemeSwitcher';
 import { useAppStore } from '@/store/app.store';
 import { auth } from '@/lib/firebase';
 import { updatePassword } from 'firebase/auth';
 import { Link } from 'react-router-dom';
+import { isDesktop } from '@/lib/platform';
+import { checkForUpdate, type AppUpdateInfo } from '@/lib/updater';
+import { UpdateModal } from '@/components/updater/UpdateModal';
 
 type SettingsTab = 'profile' | 'security' | 'notifications' | 'appearance' | 'privacy';
 
@@ -29,6 +33,28 @@ export const SettingsPage: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+
+  const handleManualCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    try {
+      const res = await checkForUpdate({ silent: false });
+      if (res.status === 'update-available') {
+        setUpdateInfo(res.update);
+        setShowUpdateModal(true);
+      } else if (res.status === 'up-to-date') {
+        showToast(`You're running the latest version (v${res.currentVersion}).`);
+      } else if (res.status === 'error') {
+        showError(res.message);
+      }
+    } catch {
+      showError('Failed to check for updates. Check internet connection.');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -156,6 +182,38 @@ export const SettingsPage: React.FC = () => {
                 <Link to="/pricing" className="btn-primary btn-sm">Upgrade to Premium</Link>
               </div>
             </div>
+
+            {isDesktop() && (
+              <>
+                <div className="divider" />
+                <div>
+                  <h3 className="text-sm font-semibold text-primary mb-3">Desktop Updates</h3>
+                  <div
+                    className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border gap-3"
+                    style={{ backgroundColor: 'var(--muted)', borderColor: 'var(--border)' }}
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-primary">CONVET PULSE for Windows</p>
+                        <span className="badge badge-success font-mono text-[11px]">v1.0.0</span>
+                      </div>
+                      <p className="text-xs text-muted-cv mt-0.5">
+                        Automatic updates securely distributed via GitHub Releases.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={checkingUpdate}
+                      onClick={handleManualCheckUpdate}
+                      className="btn-secondary btn-sm gap-2 shrink-0"
+                    >
+                      <RefreshCw size={13} className={checkingUpdate ? 'animate-spin text-accent' : ''} />
+                      {checkingUpdate ? 'Checking...' : 'Check for Updates'}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
 
             <div className="divider" />
 
@@ -363,13 +421,25 @@ export const SettingsPage: React.FC = () => {
     <div className="pt-20 pb-16" style={{ backgroundColor: 'var(--bg)' }}>
       <div className="container-narrow">
         {toastMessage && (
-          <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 p-4 rounded-xl shadow-cv-lg text-white bg-success-600 text-sm animate-slide-up">
+          <div
+            className="fixed z-50 flex items-center gap-2 p-4 rounded-xl shadow-cv-lg text-white bg-success-600 text-sm animate-slide-up"
+            style={{
+              bottom: 'calc(1.5rem + env(safe-area-inset-bottom, 0px))',
+              right: 'max(1.5rem, env(safe-area-inset-right, 0px))',
+            }}
+          >
             <CheckCircle2 size={16} />
             {toastMessage}
           </div>
         )}
         {errorMessage && (
-          <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 p-4 rounded-xl shadow-cv-lg text-white bg-red-600 text-sm animate-slide-up">
+          <div
+            className="fixed z-50 flex items-center gap-2 p-4 rounded-xl shadow-cv-lg text-white bg-red-600 text-sm animate-slide-up"
+            style={{
+              bottom: 'calc(1.5rem + env(safe-area-inset-bottom, 0px))',
+              right: 'max(1.5rem, env(safe-area-inset-right, 0px))',
+            }}
+          >
             <AlertCircle size={16} />
             {errorMessage}
           </div>
@@ -412,6 +482,12 @@ export const SettingsPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      <UpdateModal
+        isOpen={showUpdateModal}
+        updateInfo={updateInfo}
+        onClose={() => setShowUpdateModal(false)}
+      />
     </div>
   );
 };

@@ -18,7 +18,15 @@ import {
   changePassword,
   logout,
   mustChangePassword,
+  getClientIp,
 } from './auth.js';
+import {
+  verifyFirebaseIdToken,
+  extractBearerToken,
+  checkRateLimit,
+  isNotificationDeduplicated,
+  getFirebaseProjectId,
+} from './firebaseAuth.js';
 import {
   getPremiumConfig,
   getPublicPremiumConfig,
@@ -185,30 +193,34 @@ export async function handleApiRoute(req, res, url) {
     const body = await readBody();
     if (body?.visitorId) {
       const page = body.page || 'Homepage';
+      const isAuthenticated = Boolean(body.isAuthenticated);
       const result = db.recordVisitor({
         id: body.visitorId,
-        isAuthenticated: Boolean(body.isAuthenticated),
+        isAuthenticated,
         userId: body.userId || null,
       });
 
-      if (result.isNew) {
-        // Genuinely new visitor (deduplicated for 24 hours)
+      if (isAuthenticated) {
+        // Authenticated users are covered by the app-open notification.
+        // Skip visitor notification to prevent "Authenticated Visitor" + "Authenticated User Visit" duplicates.
+      } else if (result.isNew) {
+        // Genuinely new anonymous visitor (deduplicated for 24 hours)
         telegramService.notifyNewVisitor({
           visitorId: body.visitorId,
           page,
-          isAuthenticated: Boolean(body.isAuthenticated),
-          userId: body.userId || null,
+          isAuthenticated: false,
+          userId: null,
         }).catch((err) => {
           console.error('[API] notifyNewVisitor failed:', err.message);
         });
       } else {
-        // Returning visitor (only sent if notify_returning_visitor is enabled, with cooldown)
+        // Returning anonymous visitor (only sent if notify_returning_visitor is enabled, with cooldown)
         telegramService.notifyReturningVisitor({
           visitorId: body.visitorId,
           page,
           pageViews: result.pageViews,
-          isAuthenticated: Boolean(body.isAuthenticated),
-          userId: body.userId || null,
+          isAuthenticated: false,
+          userId: null,
         }).catch((err) => {
           console.error('[API] notifyReturningVisitor failed:', err.message);
         });
@@ -679,30 +691,134 @@ export async function handleApiRoute(req, res, url) {
   // ─────────────────────────────────────────────────────────
   if (pathname === '/api/auth/login-event' && method === 'POST') {
     const body = await readBody();
-    const { email, name, provider, userId } = body || {};
-    if (!userId && !email) {
-      return sendJson(400, { error: 'User identifier required' });
+    const token = extractBearerToken(req, body);
+
+    // Rate limit by IP (20 requests per minute)
+    const ip = getClientIp(req);
+    const rl = checkRateLimit(`login-event:${ip}`, 20, 60000);
+    if (!rl.allowed) return sendJson(429, { error: 'Too many requests', retryAfter: rl.retryAfter });
+
+    // Determine verified identity
+    let verifiedId, verifiedEmail, verifiedName;
+    const projectId = getFirebaseProjectId();
+
+    if (projectId && token) {
+      // Firebase configured and token supplied — cryptographically verify
+      const result = await verifyFirebaseIdToken(token);
+      if (!result.valid) return sendJson(401, { error: 'Invalid or expired authentication token' });
+      verifiedId = result.user.uid;
+      verifiedEmail = result.user.email || body?.email;
+      verifiedName = result.user.name || body?.name;
+    } else if (!projectId) {
+      // Firebase not configured (dev/test) — trust body but require identifier
+      const { userId, email, name } = body || {};
+      if (!userId && !email) return sendJson(400, { error: 'User identifier required' });
+      verifiedId = userId || email;
+      verifiedEmail = email;
+      verifiedName = name;
+    } else {
+      // Firebase configured but no token supplied
+      return sendJson(401, { error: 'Authentication token required' });
     }
-    await telegramService.notifySuccessfulLogin({ id: userId || email, name, email }, provider || 'Email & Password').catch(() => {});
+
+    // Server-side deduplication — one login notification per user per 60 seconds
+    if (isNotificationDeduplicated(`login-event:${verifiedId}`, 60 * 1000)) {
+      return sendJson(200, { ok: true, success: true, deduplicated: true });
+    }
+
+    const { provider, isNewRegistration } = body || {};
+
+    if (isNewRegistration) {
+      // First-time account creation — use the NEW USER REGISTRATION template
+      await telegramService.notifyNewUser({
+        id: verifiedId,
+        name: verifiedName,
+        email: verifiedEmail,
+      }).catch(() => {});
+    } else {
+      // Normal login — use the User Login template
+      await telegramService.notifySuccessfulLogin(
+        { id: verifiedId, name: verifiedName, email: verifiedEmail },
+        provider || 'Email & Password'
+      ).catch(() => {});
+    }
+
     return sendJson(200, { ok: true, success: true });
   }
 
   if (pathname === '/api/auth/app-open' && method === 'POST') {
     const body = await readBody();
-    const { userId, name, email } = body || {};
-    if (!userId) {
-      return sendJson(400, { error: 'Authenticated userId required' });
+    const token = extractBearerToken(req, body);
+
+    // Rate limit by IP
+    const ip = getClientIp(req);
+    const rl = checkRateLimit(`app-open:${ip}`, 20, 60000);
+    if (!rl.allowed) return sendJson(429, { error: 'Too many requests', retryAfter: rl.retryAfter });
+
+    // Determine verified identity
+    let verifiedId, verifiedEmail, verifiedName;
+    const projectId = getFirebaseProjectId();
+
+    if (projectId && token) {
+      const result = await verifyFirebaseIdToken(token);
+      if (!result.valid) return sendJson(401, { error: 'Invalid or expired authentication token' });
+      verifiedId = result.user.uid;
+      verifiedEmail = result.user.email || body?.email;
+      verifiedName = result.user.name || body?.name;
+    } else if (!projectId) {
+      const { userId, name, email } = body || {};
+      if (!userId) return sendJson(400, { error: 'Authenticated userId required' });
+      verifiedId = userId;
+      verifiedEmail = email;
+      verifiedName = name;
+    } else {
+      return sendJson(401, { error: 'Authentication token required' });
     }
-    const notified = await telegramService.notifyAppOpen({ id: userId, name, email });
+
+    // Server-side deduplication — one app-open notification per user per 15 minutes
+    if (isNotificationDeduplicated(`app-open:${verifiedId}`, 15 * 60 * 1000)) {
+      return sendJson(200, { ok: true, success: true, notified: false, deduplicated: true });
+    }
+
+    const notified = await telegramService.notifyAppOpen({
+      id: verifiedId,
+      name: verifiedName,
+      email: verifiedEmail,
+    });
     return sendJson(200, { ok: true, success: true, notified: Boolean(notified), deduplicated: !notified });
   }
 
   if (pathname === '/api/user/usage' && method === 'GET') {
-    const userId = url.searchParams.get('userId');
-    if (!userId) {
-      return sendJson(400, { error: 'userId parameter is required' });
+    const requestedUserId = url.searchParams.get('userId');
+    if (!requestedUserId) return sendJson(400, { error: 'userId parameter is required' });
+
+    // Admin session can read any user's data
+    const adminSession = requireAdmin(req);
+    if (adminSession) {
+      const usage = db.getUserUsageStats(requestedUserId);
+      return sendJson(200, { usage });
     }
-    const usage = db.getUserUsageStats(userId);
+
+    // Non-admin: require Firebase token and verify identity matches requested userId
+    const token = extractBearerToken(req, {});
+    const projectId = getFirebaseProjectId();
+
+    if (!projectId) {
+      // Firebase not configured (dev/test) — allow without token verification
+      const usage = db.getUserUsageStats(requestedUserId);
+      return sendJson(200, { usage });
+    }
+
+    if (!token) return sendJson(401, { error: 'Authentication required' });
+
+    const result = await verifyFirebaseIdToken(token);
+    if (!result.valid) return sendJson(401, { error: 'Invalid authentication token' });
+
+    if (result.user.uid !== requestedUserId) {
+      return sendJson(403, { error: 'Access denied: cannot read another user\'s usage data' });
+    }
+
+    const usage = db.getUserUsageStats(requestedUserId);
     return sendJson(200, { usage });
   }
 

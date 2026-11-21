@@ -12,7 +12,7 @@ export const ConveterLogo: React.FC<LogoProps> = ({
   className = '',
 }) => {
   return (
-    <div className={`flex items-center gap-2.5 ${className}`}>
+    <div className={`flex items-center gap-2 sm:gap-2.5 flex-shrink-0 select-none ${className}`}>
       {/* SVG Mark */}
       <svg
         width={size}
@@ -21,6 +21,7 @@ export const ConveterLogo: React.FC<LogoProps> = ({
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
         aria-hidden="true"
+        className="flex-shrink-0"
       >
         <rect width="32" height="32" rx="8" fill="var(--accent)" />
         {/* Up arrow */}
@@ -55,7 +56,7 @@ export const ConveterLogo: React.FC<LogoProps> = ({
 
       {showText && (
         <span
-          className="font-bold tracking-tight select-none"
+          className="font-bold tracking-tight select-none whitespace-nowrap flex-shrink-0"
           style={{
             fontSize: size * 0.56,
             letterSpacing: '-0.02em',

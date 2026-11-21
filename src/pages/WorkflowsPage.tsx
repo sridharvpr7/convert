@@ -181,7 +181,13 @@ export const WorkflowsPage: React.FC = () => {
     <div className="pt-20 pb-16" style={{ backgroundColor: 'var(--bg)' }}>
       <div className="container-app">
         {toastMessage && (
-          <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 p-4 rounded-xl shadow-cv-lg text-white bg-success-600 text-sm animate-slide-up">
+          <div
+            className="fixed z-50 flex items-center gap-2 p-4 rounded-xl shadow-cv-lg text-white bg-success-600 text-sm animate-slide-up"
+            style={{
+              bottom: 'calc(1.5rem + env(safe-area-inset-bottom, 0px))',
+              right: 'max(1.5rem, env(safe-area-inset-right, 0px))',
+            }}
+          >
             <CheckCircle2 size={16} />
             {toastMessage}
           </div>

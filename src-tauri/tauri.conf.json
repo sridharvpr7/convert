@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "CONVET PULSE",
         "width": 1280,
         "height": 800,
@@ -22,7 +23,15 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data: https://convetpulse.onrender.com; connect-src 'self' https://convetpulse.onrender.com https://*.firebaseio.com https://*.googleapis.com; img-src 'self' blob: data: https:; font-src 'self' data: https:;"
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data: https://convetpulse.onrender.com; connect-src 'self' https://convetpulse.onrender.com https://*.firebaseio.com https://*.googleapis.com https://github.com https://*.githubusercontent.com; img-src 'self' blob: data: https:; font-src 'self' data: https:;"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "YOUR_UPDATER_PUBLIC_KEY_HERE",
+      "endpoints": [
+        "https://github.com/sridharvpr7/convert/releases/latest/download/latest.json"
+      ]
     }
   },
   "bundle": {

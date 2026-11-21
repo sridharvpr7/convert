@@ -6,6 +6,21 @@
 
 import { getApiBaseUrl } from './platform';
 
+// Lazily imported to avoid circular deps and SSR issues
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _firebaseAuth: any = null;
+async function getFirebaseIdToken(): Promise<string | null> {
+  try {
+    if (!_firebaseAuth) {
+      const mod = await import('./firebase');
+      _firebaseAuth = mod.auth;
+    }
+    return _firebaseAuth?.currentUser ? await _firebaseAuth.currentUser.getIdToken() : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface ApiJob {
   id: string;
   userId?: string;
@@ -728,11 +743,15 @@ export const apiClient = {
   /**
    * Notify Telegram of Successful Explicit Login
    */
-  async notifyLogin(params: { userId?: string; email?: string; name?: string; provider?: string }): Promise<void> {
+  async notifyLogin(params: { userId?: string; email?: string; name?: string; provider?: string; isNewRegistration?: boolean }): Promise<void> {
     try {
+      const token = await getFirebaseIdToken();
       await fetch(`${API_BASE}/api/auth/login-event`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(params),
       });
     } catch {
@@ -745,9 +764,13 @@ export const apiClient = {
    */
   async notifyAppOpen(params: { userId: string; email?: string; name?: string }): Promise<void> {
     try {
+      const token = await getFirebaseIdToken();
       await fetch(`${API_BASE}/api/auth/app-open`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(params),
       });
     } catch {
@@ -759,7 +782,17 @@ export const apiClient = {
    * Get User Usage Stats
    */
   async getUserUsage(userId: string): Promise<{ totalSuccessful: number; byAction: Record<string, number> } | null> {
-    const res = await safeFetch<{ usage: { totalSuccessful: number; byAction: Record<string, number> } }>(`/api/user/usage?userId=${encodeURIComponent(userId)}`);
-    return res ? res.usage : null;
+    try {
+      const token = await getFirebaseIdToken();
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await safeFetch<{ usage: { totalSuccessful: number; byAction: Record<string, number> } }>(
+        `/api/user/usage?userId=${encodeURIComponent(userId)}`,
+        { headers }
+      );
+      return res ? res.usage : null;
+    } catch {
+      return null;
+    }
   },
 };

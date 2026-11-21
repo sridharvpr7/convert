@@ -11,6 +11,8 @@
     "dialog:default",
     "fs:default",
     "http:default",
-    "notification:default"
+    "notification:default",
+    "updater:default",
+    "process:default"
   ]
 }
