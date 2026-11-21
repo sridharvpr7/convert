@@ -37,7 +37,11 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       {children}
       {/* Toast viewport */}
       <div
-        className="fixed bottom-5 right-5 z-[200] flex flex-col gap-2.5 max-w-sm w-full pointer-events-none"
+        className="fixed z-[200] flex flex-col gap-2.5 max-w-sm w-[calc(100%-2.5rem)] pointer-events-none"
+        style={{
+          bottom: 'calc(1.25rem + env(safe-area-inset-bottom, 0px))',
+          right: 'max(1.25rem, env(safe-area-inset-right, 0px))',
+        }}
         aria-live="polite"
       >
         {toasts.map((t) => (

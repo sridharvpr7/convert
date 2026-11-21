@@ -55,7 +55,10 @@ export const MegaMenu: React.FC = () => {
       {/* Backdrop */}
       <div
         className="fixed inset-0 z-40"
-        style={{ top: '57px', backgroundColor: 'rgba(0,0,0,0.3)' }}
+        style={{
+          top: 'calc(3.5rem + env(safe-area-inset-top, 0px))',
+          backgroundColor: 'rgba(0,0,0,0.3)',
+        }}
         onClick={handleClose}
         aria-hidden="true"
       />

@@ -72,6 +72,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
           name: appUser.name,
           email: appUser.email,
           provider: 'Email & Password',
+        }).then(() => {
+          // Suppress the redundant app-open notification from onAuthStateChanged
+          sessionStorage.setItem('conveter_login_notified', String(Date.now()));
         }).catch(() => {});
         navigate(redirectTarget);
       } else if (mode === 'register') {
@@ -90,6 +93,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
           name: appUser.name,
           email: appUser.email,
           provider: 'Registration',
+          isNewRegistration: true,
+        }).then(() => {
+          // Suppress the redundant app-open notification from onAuthStateChanged
+          sessionStorage.setItem('conveter_login_notified', String(Date.now()));
         }).catch(() => {});
         navigate(redirectTarget);
       } else if (mode === 'forgot') {
@@ -127,6 +134,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
         name: appUser.name,
         email: appUser.email,
         provider: 'Google',
+      }).then(() => {
+        // Suppress the redundant app-open notification from onAuthStateChanged
+        sessionStorage.setItem('conveter_login_notified', String(Date.now()));
       }).catch(() => {});
       navigate(redirectTarget);
     } catch (authError) {

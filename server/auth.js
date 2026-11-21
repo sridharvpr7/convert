@@ -289,7 +289,7 @@ function checkRateLimit(ip) {
   return true; // allowed
 }
 
-function getClientIp(req) {
+export function getClientIp(req) {
   return (
     req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
     req.socket?.remoteAddress ||
