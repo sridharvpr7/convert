@@ -109,6 +109,7 @@ export const Header: React.FC = () => {
     { label: 'Archive', href: '/tools/archive', show: siteDisplayConfig?.categories?.archive?.visible !== false },
     { label: 'Pricing', href: '/pricing', show: siteDisplayConfig?.navigation?.showPricing !== false },
     { label: 'Manual', href: '/help', show: true },
+    { label: 'Download', href: '/download', show: true },
   ].filter((item) => item.show);
 
   return (

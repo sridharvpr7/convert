@@ -30,6 +30,7 @@ import { WorkflowsPage } from '@/pages/WorkflowsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { AdminPage } from '@/pages/AdminPage';
 import { HelpPage } from '@/pages/HelpPage';
+import { DownloadPage } from '@/pages/DownloadPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 
 // UI Providers & Client
@@ -304,6 +305,14 @@ const AppRoutes: React.FC = () => {
           element={
             <PageWrapper>
               <HelpPage />
+            </PageWrapper>
+          }
+        />
+        <Route
+          path="/download"
+          element={
+            <PageWrapper>
+              <DownloadPage />
             </PageWrapper>
           }
         />

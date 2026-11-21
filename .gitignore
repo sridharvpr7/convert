@@ -6,3 +6,11 @@ config
 .env*
 !.env.example
 target/
+*.keystore
+*.jks
+*.key
+keystore.properties
+*.signing-key
+*.pem
+*.crt
+
