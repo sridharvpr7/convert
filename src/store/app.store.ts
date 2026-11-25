@@ -60,6 +60,11 @@ interface AppState {
   toggleFavoriteTool: (slug: string) => void;
   isFavoriteTool: (slug: string) => boolean;
 
+  // Recently Used Tools
+  recentTools: string[]; // tool slugs
+  addRecentTool: (slug: string) => void;
+  clearRecentTools: () => void;
+
   // Admin Authentication State
   adminAuthenticated: boolean;
   setAdminAuthenticated: (val: boolean) => void;
@@ -173,6 +178,16 @@ export const useAppStore = create<AppState>()(
       },
       isFavoriteTool: (slug) => get().favoriteTools.includes(slug),
 
+      // Recently Used Tools
+      recentTools: [],
+      addRecentTool: (slug) => {
+        set((state) => {
+          const filtered = state.recentTools.filter((s) => s !== slug);
+          return { recentTools: [slug, ...filtered].slice(0, 16) };
+        });
+      },
+      clearRecentTools: () => set({ recentTools: [] }),
+
       // Admin Auth
       adminAuthenticated: false,
       setAdminAuthenticated: (adminAuthenticated) => set({ adminAuthenticated }),
@@ -192,6 +207,7 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         theme: state.theme,
         favoriteTools: state.favoriteTools,
+        recentTools: state.recentTools,
         user: state.user,
         notifications: state.notifications,
       }),

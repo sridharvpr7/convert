@@ -7,6 +7,7 @@ import {
   Play, Layers, RefreshCw, Lock, Boxes, WifiOff, ShieldCheck,
 } from 'lucide-react';
 import { CATEGORY_META, getPopularTools, getNewTools, TOOLS } from '@/registry/tools';
+import { getAllStudios } from '@/registry/studios';
 import { useAppStore } from '@/store/app.store';
 import { apiClient } from '@/lib/api';
 import { loadHistory } from '@/lib/history';
@@ -537,6 +538,94 @@ const getCategoryIcon = (id: string, size = 16): React.ReactNode => {
     utilities: <RefreshCw {...props} />,
   };
   return map[id] ?? <Zap {...props} />;
+};
+
+// ────────────────────────────────────────────────
+// Productivity Studios Section
+// ────────────────────────────────────────────────
+const StudiosSection: React.FC = () => {
+  const studios = getAllStudios();
+
+  return (
+    <section className="py-16 border-t" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
+      <div className="container-app">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between mb-8 gap-4">
+          <div>
+            <div className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full mb-2 border bg-accent-subtle text-accent border-accent/20">
+              <Sparkles size={12} />
+              <span>12 Specialized Workspaces</span>
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-primary tracking-tight">
+              Productivity Studios
+            </h2>
+            <p className="text-sm text-secondary mt-1 max-w-xl">
+              Dedicated creative, engineering, student, and security studios designed for focused workflows.
+            </p>
+          </div>
+          <Link to="/studios" className="btn-secondary btn-sm gap-1.5 self-start sm:self-auto flex-shrink-0">
+            <span>Explore all 12 studios</span>
+            <ArrowRight size={13} />
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {studios.map((studio) => (
+            <Link
+              key={studio.id}
+              to={`/studios/${studio.slug}`}
+              className="group p-4 rounded-xl border flex flex-col justify-between transition-all duration-200 hover:-translate-y-1 shadow-cv-sm"
+              style={{
+                backgroundColor: 'var(--card)',
+                borderColor: 'var(--border)',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = `${studio.color}60`;
+                e.currentTarget.style.boxShadow = `0 6px 20px ${studio.color}15`;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--border)';
+                e.currentTarget.style.boxShadow = 'none';
+              }}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <span
+                    className="w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold"
+                    style={{ backgroundColor: `${studio.color}18`, color: studio.color }}
+                  >
+                    {studio.name.slice(0, 2).toUpperCase()}
+                  </span>
+                  <span
+                    className="text-[10px] font-semibold px-2 py-0.5 rounded-full border"
+                    style={{
+                      backgroundColor: studio.status === 'active' ? '#10b98115' : `${studio.color}15`,
+                      color: studio.status === 'active' ? '#10b981' : studio.color,
+                      borderColor: studio.status === 'active' ? '#10b98130' : `${studio.color}30`,
+                    }}
+                  >
+                    {studio.badge}
+                  </span>
+                </div>
+                <h3 className="text-sm font-bold text-primary group-hover:text-accent transition-colors mb-1">
+                  {studio.name}
+                </h3>
+                <p className="text-xs text-muted-cv line-clamp-2 leading-relaxed">
+                  {studio.description}
+                </p>
+              </div>
+
+              <div className="pt-3 mt-3 border-t flex items-center justify-between" style={{ borderColor: 'var(--border)' }}>
+                <span className="text-[11px] font-medium" style={{ color: studio.color }}>
+                  {studio.status === 'active' ? 'Open Studio' : 'Roadmap Preview'}
+                </span>
+                <ChevronRight size={13} className="text-muted-cv group-hover:translate-x-0.5 transition-transform" />
+              </div>
+            </Link>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
 };
 
 // ────────────────────────────────────────────────
@@ -1203,6 +1292,7 @@ export const HomePage: React.FC = () => {
     <main>
       {hp?.showHero !== false && <HeroSection />}
       {hp?.showCategories !== false && <CategoriesSection />}
+      <StudiosSection />
       {hp?.showFeaturedTools !== false && <PopularToolsSection />}
       {hp?.showHowItWorks !== false && <HowItWorksSection />}
       {hp?.showCTA !== false && <AISection />}

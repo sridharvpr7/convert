@@ -5,7 +5,7 @@
 // expiring download tokens, and temporary file management.
 // ============================================================
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   DownloadCloud, CheckCircle2, Clock, FileText, Image as ImageIcon,
@@ -71,6 +71,15 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [previewOpenId, setPreviewOpenId] = useState<string | null>(null);
   const [previewContent, setPreviewContent] = useState<{ [id: string]: string }>({});
+  const [imagePreviewUrls, setImagePreviewUrls] = useState<{ [id: string]: string }>({});
+  const objectUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    return () => {
+      objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      objectUrlsRef.current = [];
+    };
+  }, []);
 
   // Flatten out all outputs
   const flattenedOutputs = useMemo(() => {
@@ -84,22 +93,12 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
       durationMs: number;
       completedAt: Date;
       jobId?: string;
+      recognizedTextPreview?: string;
+      xfaWarning?: string;
     }[] = [];
 
     files.forEach((f) => {
-      if (f.result) {
-        list.push({
-          id: `${f.id}_0`,
-          originalName: f.originalFile.name,
-          originalSize: f.originalFile.size,
-          outputName: f.result.filename,
-          outputBlob: f.result.blob,
-          outputSize: f.result.blob.size,
-          durationMs: f.durationMs,
-          completedAt: f.completedAt,
-          jobId: f.jobId,
-        });
-      } else if (f.results) {
+      if (f.results && f.results.length > 0) {
         f.results.forEach((r, idx) => {
           list.push({
             id: `${f.id}_${idx}`,
@@ -111,7 +110,23 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
             durationMs: f.durationMs,
             completedAt: f.completedAt,
             jobId: f.jobId,
+            recognizedTextPreview: r.meta?.recognizedTextPreview as string | undefined,
+            xfaWarning: r.meta?.xfaWarning as string | undefined,
           });
+        });
+      } else if (f.result) {
+        list.push({
+          id: `${f.id}_0`,
+          originalName: f.originalFile.name,
+          originalSize: f.originalFile.size,
+          outputName: f.result.filename,
+          outputBlob: f.result.blob,
+          outputSize: f.result.blob.size,
+          durationMs: f.durationMs,
+          completedAt: f.completedAt,
+          jobId: f.jobId,
+          recognizedTextPreview: f.result.meta?.recognizedTextPreview as string | undefined,
+          xfaWarning: f.result.meta?.xfaWarning as string | undefined,
         });
       }
     });
@@ -203,8 +218,23 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
 
     setPreviewOpenId(item.id);
 
-    // If text file and not cached, read content
     const ext = item.outputName.split('.').pop()?.toLowerCase() || '';
+    if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext) && !imagePreviewUrls[item.id]) {
+      const url = URL.createObjectURL(item.outputBlob);
+      objectUrlsRef.current.push(url);
+      setImagePreviewUrls((prev) => ({ ...prev, [item.id]: url }));
+    }
+
+    // If OCR recognized text preview is attached
+    if (item.recognizedTextPreview && !previewContent[item.id]) {
+      setPreviewContent((prev) => ({
+        ...prev,
+        [item.id]: item.recognizedTextPreview!,
+      }));
+      return;
+    }
+
+    // If text file and not cached, read content
     if (['csv', 'json', 'txt', 'tsv', 'xml', 'svg'].includes(ext) && !previewContent[item.id]) {
       try {
         const text = await item.outputBlob.text();
@@ -345,7 +375,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
           const isPreviewOpen = previewOpenId === item.id;
           const ext = item.outputName.split('.').pop()?.toLowerCase() || '';
           const isImage = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext);
-          const isText = ['csv', 'json', 'txt', 'tsv', 'xml', 'svg'].includes(ext);
+          const isText = ['csv', 'json', 'txt', 'tsv', 'xml', 'svg'].includes(ext) || Boolean(item.recognizedTextPreview);
           const itemSavings = item.originalSize > item.outputSize
             ? Math.round(((item.originalSize - item.outputSize) / item.originalSize) * 100)
             : 0;
@@ -393,6 +423,11 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                         <Clock size={11} /> {(item.durationMs / 1000).toFixed(1)}s
                       </span>
                     </div>
+                    {item.xfaWarning && (
+                      <p className="text-xs text-amber-600 mt-1.5 font-medium">
+                        ⚠️ {item.xfaWarning}
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -441,10 +476,10 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                   <p className="text-2xs font-semibold uppercase tracking-wider text-muted-cv mb-2">
                     Live File Preview
                   </p>
-                  {isImage && (
+                  {isImage && imagePreviewUrls[item.id] && (
                     <div className="max-h-80 overflow-hidden flex items-center justify-center p-3 rounded-lg border bg-base/50" style={{ borderColor: 'var(--border)' }}>
                       <img
-                        src={URL.createObjectURL(item.outputBlob)}
+                        src={imagePreviewUrls[item.id]}
                         alt={item.outputName}
                         className="max-h-72 object-contain rounded"
                       />

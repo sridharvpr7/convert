@@ -2,12 +2,13 @@ import React, { useState, useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Search, Grid3X3, LayoutList, Star, ArrowRight,
-  Layers, WifiOff, Cloud, X,
+  Layers, WifiOff, Cloud, X, Clock, Sparkles,
 } from 'lucide-react';
 import {
   TOOLS, CATEGORY_META, getToolsByCategory, ToolCategory, Tool,
   searchTools,
 } from '@/registry/tools';
+import { getAllStudios, getToolsForStudio, StudioId } from '@/registry/studios';
 import { useAppStore } from '@/store/app.store';
 
 interface ToolCardProps {
@@ -227,14 +228,18 @@ const ToolCard: React.FC<ToolCardProps> = ({ tool, view }) => {
 // ────────────────────────────────────────────────
 export const ToolsPage: React.FC = () => {
   const { category } = useParams<{ category?: string }>();
-  const { siteDisplayConfig } = useAppStore();
+  const { siteDisplayConfig, favoriteTools, recentTools } = useAppStore();
   const [query, setQuery] = useState('');
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [filterPremium, setFilterPremium] = useState<'all' | 'free' | 'premium'>('all');
   const [filterOffline, setFilterOffline] = useState(false);
+  const [filterFavorites, setFilterFavorites] = useState(false);
+  const [filterRecents, setFilterRecents] = useState(false);
+  const [selectedStudio, setSelectedStudio] = useState<string>('all');
 
   const activeCategory = category as ToolCategory | undefined;
   const categoryMeta = activeCategory ? CATEGORY_META[activeCategory] : null;
+  const allStudios = useMemo(() => getAllStudios(), []);
 
   const categories = useMemo(() => {
     return Object.values(CATEGORY_META).filter((cat) => {
@@ -251,6 +256,17 @@ export const ToolsPage: React.FC = () => {
       if (siteDisplayConfig?.categories?.[t.category]?.visible === false) return false;
       return true;
     });
+    if (selectedStudio !== 'all') {
+      const studioTools = getToolsForStudio(selectedStudio as StudioId);
+      const studioSlugs = new Set(studioTools.map((t) => t.slug));
+      result = result.filter((t) => studioSlugs.has(t.slug));
+    }
+    if (filterFavorites) {
+      result = result.filter((t) => favoriteTools.includes(t.slug));
+    }
+    if (filterRecents) {
+      result = result.filter((t) => recentTools.includes(t.slug));
+    }
     if (query) result = result.filter((t) => searchTools(query).some((r) => r.id === t.id));
     if (filterPremium === 'free') {
       result = result.filter((t) => {
@@ -266,7 +282,7 @@ export const ToolsPage: React.FC = () => {
     }
     if (filterOffline) result = result.filter((t) => t.offlineSupported);
     return result;
-  }, [activeCategory, query, filterPremium, filterOffline, siteDisplayConfig]);
+  }, [activeCategory, query, filterPremium, filterOffline, filterFavorites, filterRecents, selectedStudio, favoriteTools, recentTools, siteDisplayConfig]);
 
   return (
     <div className="pt-20 pb-16">
@@ -354,6 +370,33 @@ export const ToolsPage: React.FC = () => {
               </Link>
             ))}
           </nav>
+
+          {/* Studios Navigation */}
+          <div className="pt-3 border-t mt-2" style={{ borderColor: 'var(--border)' }}>
+            <div className="flex items-center justify-between mb-2 px-1">
+              <p className="text-label">Studios</p>
+              <Link to="/studios" className="text-2xs text-accent hover:underline font-semibold">
+                All (12)
+              </Link>
+            </div>
+            <nav className="space-y-0.5">
+              {allStudios.map((s) => (
+                <Link
+                  key={s.id}
+                  to={`/studios/${s.slug}`}
+                  className="flex items-center justify-between w-full px-3 py-1.5 rounded-lg text-xs transition-all duration-150 text-secondary hover:bg-hover-cv hover:text-primary"
+                >
+                  <span className="truncate">{s.name}</span>
+                  <span
+                    className="text-[10px] font-mono px-1.5 py-0.2 rounded"
+                    style={{ backgroundColor: `${s.color}15`, color: s.color }}
+                  >
+                    {s.badge.includes('Active') ? 'Live' : 'P' + s.phase}
+                  </span>
+                </Link>
+              ))}
+            </nav>
+          </div>
         </aside>
 
         {/* Main content */}
@@ -454,6 +497,34 @@ export const ToolsPage: React.FC = () => {
               100% Private (Local)
             </button>
 
+            {/* Favorites filter */}
+            {favoriteTools.length > 0 && (
+              <button
+                onClick={() => setFilterFavorites(!filterFavorites)}
+                className={`flex items-center gap-1.5 h-10 px-3.5 rounded-xl border text-xs font-semibold transition-all duration-150 flex-shrink-0 ${
+                  filterFavorites ? 'text-warning-500 border-warning-500/40 bg-warning-500/10' : 'text-muted-cv border-cv bg-surface-cv'
+                }`}
+                aria-pressed={filterFavorites}
+              >
+                <Star size={13} className={filterFavorites ? 'fill-current' : ''} />
+                Favorites ({favoriteTools.length})
+              </button>
+            )}
+
+            {/* Recents filter */}
+            {recentTools.length > 0 && (
+              <button
+                onClick={() => setFilterRecents(!filterRecents)}
+                className={`flex items-center gap-1.5 h-10 px-3.5 rounded-xl border text-xs font-semibold transition-all duration-150 flex-shrink-0 ${
+                  filterRecents ? 'text-accent border-accent/40 bg-accent/10' : 'text-muted-cv border-cv bg-surface-cv'
+                }`}
+                aria-pressed={filterRecents}
+              >
+                <Clock size={13} />
+                Recents ({recentTools.length})
+              </button>
+            )}
+
             {/* View toggle */}
             <div
               className="flex items-center rounded-xl border overflow-hidden flex-shrink-0"
@@ -488,14 +559,19 @@ export const ToolsPage: React.FC = () => {
               Showing <span className="font-semibold text-primary">{allTools.length}</span> of {TOOLS.length} tools
               {query && <span> for &ldquo;{query}&rdquo;</span>}
               {filterOffline && <span> · Offline only</span>}
+              {filterFavorites && <span> · Starred favorites</span>}
+              {filterRecents && <span> · Recently opened</span>}
               {filterPremium !== 'all' && <span> · {filterPremium} plan</span>}
             </p>
-            {(query || filterOffline || filterPremium !== 'all') && (
+            {(query || filterOffline || filterFavorites || filterRecents || filterPremium !== 'all') && (
               <button
                 onClick={() => {
                   setQuery('');
                   setFilterPremium('all');
                   setFilterOffline(false);
+                  setFilterFavorites(false);
+                  setFilterRecents(false);
+                  setSelectedStudio('all');
                 }}
                 className="text-xs text-accent hover:underline font-medium"
               >
