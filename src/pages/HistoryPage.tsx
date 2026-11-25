@@ -15,7 +15,7 @@ import { useToast } from '@/components/ui/ToastContext';
 
 type SortOption = 'date-desc' | 'date-asc' | 'name-asc' | 'size-desc';
 
-const CATEGORY_FILTERS = ['all', 'pdf', 'image', 'data', 'utilities', 'archive'] as const;
+const CATEGORY_FILTERS = ['all', 'pdf', 'image', 'data', 'developer', 'security', 'utilities', 'archive'] as const;
 
 export const HistoryPage: React.FC = () => {
   const navigate = useNavigate();

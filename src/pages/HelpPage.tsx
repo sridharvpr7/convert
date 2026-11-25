@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { TOOLS } from '@/registry/tools';
 import {
   BookOpen,
   Compass,
@@ -322,7 +323,7 @@ export const HelpPage: React.FC = () => {
                 to="/tools"
                 className="flex items-center justify-between p-2 text-xs text-muted-cv hover:text-accent font-medium transition-colors"
               >
-                <span>Browse All 17 Tools</span>
+                <span>Browse All {TOOLS.length} Tools</span>
                 <ExternalLink size={13} />
               </Link>
               <Link

@@ -9,6 +9,9 @@ permissions:
   contents: write
 
 jobs:
+  # ============================================================
+  # 1. WINDOWS DESKTOP RELEASE (NSIS Installer + Updater Bundle)
+  # ============================================================
   release-windows:
     name: Build & Release Windows Desktop
     runs-on: windows-latest
@@ -17,13 +20,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      - name: Install Rust
+      - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install dependencies
@@ -43,6 +46,9 @@ jobs:
           prerelease: false
           args: --bundles nsis
 
+  # ============================================================
+  # 2. ANDROID APK RELEASE (Signed Universal Release APK)
+  # ============================================================
   release-android:
     name: Build & Release Android APK
     needs: release-windows
@@ -61,13 +67,41 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Setup Node.js
+      - name: Install Android NDK
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort -V | tail -n 1)
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER=$(which sdkmanager 2>/dev/null || true)
+          fi
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager executable not found in Android SDK installation"
+            exit 1
+          fi
+
+          echo "Installing Android NDK 26.3.11579264 via $SDKMANAGER..."
+          yes | "$SDKMANAGER" --install "ndk;26.3.11579264"
+
+          NDK_PATH="$ANDROID_HOME/ndk/26.3.11579264"
+          if [ ! -d "$NDK_PATH" ]; then
+            NDK_PATH=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -n 1)
+          fi
+
+          if [ -z "$NDK_PATH" ] || [ ! -d "$NDK_PATH" ]; then
+            echo "::error::Android NDK installation failed; directory does not exist."
+            exit 1
+          fi
+
+          echo "NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$NDK_PATH" >> $GITHUB_ENV
+          echo "Successfully installed and configured Android NDK at: $NDK_PATH"
+
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      - name: Install Rust
+      - name: Install Rust Stable with Android Targets
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
@@ -75,51 +109,133 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check for Android Signing Secrets
+      - name: Validate Android Signing Secrets
         id: check-secrets
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ] && [ -n "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" ]; then
-            echo "has_secrets=true" >> $GITHUB_OUTPUT
-            echo "Android signing secrets detected."
-          else
-            echo "has_secrets=false" >> $GITHUB_OUTPUT
-            echo "::warning::Android keystore secrets not configured. Skipping signed APK release to prevent distributing unsigned binaries."
-          fi
+          MISSING_SECRETS=""
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then MISSING_SECRETS="${MISSING_SECRETS} ANDROID_KEYSTORE_BASE64"; fi
+          if [ -z "$ANDROID_KEYSTORE_PASSWORD" ]; then MISSING_SECRETS="${MISSING_SECRETS} ANDROID_KEYSTORE_PASSWORD"; fi
+          if [ -z "$ANDROID_KEY_ALIAS" ]; then MISSING_SECRETS="${MISSING_SECRETS} ANDROID_KEY_ALIAS"; fi
+          if [ -z "$ANDROID_KEY_PASSWORD" ]; then MISSING_SECRETS="${MISSING_SECRETS} ANDROID_KEY_PASSWORD"; fi
 
-      - name: Prepare Android Keystore
-        if: steps.check-secrets.outputs.has_secrets == 'true'
+          if [ -n "$MISSING_SECRETS" ]; then
+            echo "::error::Required Android release secrets are missing:${MISSING_SECRETS}. Refusing to publish an unsigned APK."
+            exit 1
+          fi
+          echo "All required Android release signing credentials verified."
+
+      - name: Decode Keystore to Secure Runner Temp
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > $RUNNER_TEMP/release.keystore
-          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> $GITHUB_ENV
-          echo "ANDROID_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
-          echo "ANDROID_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> $GITHUB_ENV
-          echo "ANDROID_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> $GITHUB_ENV
+          KEYSTORE_PATH="$RUNNER_TEMP/release.keystore"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          if [ ! -s "$KEYSTORE_PATH" ]; then
+            echo "::error::Decoded keystore file is empty or corrupted."
+            exit 1
+          fi
+          chmod 600 "$KEYSTORE_PATH"
+          echo "ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> $GITHUB_ENV
+          echo "Keystore securely written to isolated runner temp with 0600 permissions."
 
       - name: Build Android Release APK
-        if: steps.check-secrets.outputs.has_secrets == 'true'
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           npx tauri android build --apk
 
-      - name: Verify Signed APK
-        if: steps.check-secrets.outputs.has_secrets == 'true'
+      - name: Verify Signed APK Signature & Certificate Fingerprint
+        id: verify-apk
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          if [ -z "$APK_PATH" ]; then
-            echo "Error: No release APK found!"
+          # 1. Locate release APK
+          APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk/release -type f -name "*.apk" ! -name "*unsigned*" | head -n 1)
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ] || [ ! -s "$APK_PATH" ]; then
+            echo "::error::No valid signed release APK found in build outputs directory."
+            find src-tauri/gen/android/app/build/outputs/apk/ -type f || true
             exit 1
           fi
-          echo "Found APK: $APK_PATH"
-          # Verify signature with apksigner
-          $ANDROID_HOME/build-tools/34.0.0/apksigner verify --verbose "$APK_PATH" || \
-          $ANDROID_HOME/build-tools/33.0.1/apksigner verify --verbose "$APK_PATH" || true
+          if [[ "$APK_PATH" == *"unsigned"* ]]; then
+            echo "::error::Discovered APK is marked unsigned ($APK_PATH). Aborting."
+            exit 1
+          fi
+          echo "Found candidate release APK: $APK_PATH"
+
+          # 2. Locate apksigner
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          if [ -z "$APKSIGNER" ] || [ ! -x "$APKSIGNER" ]; then
+            echo "::error::apksigner binary not found or not executable in $ANDROID_HOME/build-tools"
+            exit 1
+          fi
+          echo "Using Android SDK apksigner: $APKSIGNER"
+
+          # 3. Cryptographically verify APK signature integrity
+          echo "Verifying cryptographic APK signature integrity..."
+          "$APKSIGNER" verify --verbose "$APK_PATH"
+
+          # 4. Extract APK certificate SHA-256 fingerprint
+          APK_CERT_SHA256=$("$APKSIGNER" verify --print-certs "$APK_PATH" | grep -i "SHA-256 digest" | head -n 1 | awk '{print $NF}' | tr -d ': ' | tr '[:upper:]' '[:lower:]')
+          if [ -z "$APK_CERT_SHA256" ]; then
+            echo "::error::Failed to extract certificate SHA-256 fingerprint from APK."
+            exit 1
+          fi
+
           
-          # Rename to standardized asset name
-          cp "$APK_PATH" "CONVET_PULSE_${{ github.ref_name }}_android.apk"
-          echo "RELEASE_APK_FILE=CONVET_PULSE_${{ github.ref_name }}_android.apk" >> $GITHUB_ENV
+          # 5. Extract expected certificate SHA-256 fingerprint
+          CERT_FILE="$RUNNER_TEMP/release-cert.der"
+
+          if ! keytool -exportcert \
+            -alias "$ANDROID_KEY_ALIAS" \
+            -keystore "$ANDROID_KEYSTORE_PATH" \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+            -file "$CERT_FILE"; then
+            echo "::error::Unable to export release certificate."
+            exit 1
+          fi
+
+          KEYSTORE_CERT_SHA256=$(sha256sum "$CERT_FILE" | awk '{print $1}')
+          rm -f "$CERT_FILE"
+
+          # 6. Strict equality comparison of certificate fingerprints
+          if [ "$KEYSTORE_CERT_SHA256" != "$APK_CERT_SHA256" ]; then
+            echo "::error::Certificate fingerprint mismatch! The APK was signed with an unexpected certificate."
+            exit 1
+          fi
+          echo "Verified: APK is signed with the authentic release certificate."
+
+          # 7. Standardize asset filename for GitHub Release
+          STANDARDIZED_NAME="CONVET_PULSE_${TAG_NAME}_android.apk"
+          cp "$APK_PATH" "$STANDARDIZED_NAME"
+          echo "RELEASE_APK_FILE=$STANDARDIZED_NAME" >> $GITHUB_ENV
+          echo "APK successfully staged as $STANDARDIZED_NAME"
 
       - name: Upload Android APK to GitHub Release
-        if: steps.check-secrets.outputs.has_secrets == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          gh release upload ${{ github.ref_name }} "$RELEASE_APK_FILE" --clobber
+          echo "Uploading $RELEASE_APK_FILE to GitHub Release $TAG_NAME..."
+          gh release upload "$TAG_NAME" "$RELEASE_APK_FILE" --clobber
+          echo "Android APK successfully attached to release $TAG_NAME."
+
+      - name: Cleanup Temporary Signing Files
+        if: always()
+        shell: bash
+        run: |
+          KEYSTORE_PATH="$RUNNER_TEMP/release.keystore"
+          CERT_PATH="$RUNNER_TEMP/release-cert.der"
+
+          rm -f "$KEYSTORE_PATH"
+          rm -f "$CERT_PATH"
+
+          echo "Temporary signing files removed."

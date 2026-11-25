@@ -14,3 +14,11 @@ keystore.properties
 *.pem
 *.crt
 
+
+/ Android release signing secrets
+/convetpulse-release.keystore
+/keystore_base64.txt
+
+/ Android release signing secrets
+/convetpulse-release.keystore
+/keystore_base64.txt

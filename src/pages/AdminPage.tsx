@@ -3,7 +3,7 @@
 // Comprehensive administrative console:
 // - Secure Admin Authentication & Password Management
 // - JSON-based Premium Configuration & Pricing Editor
-// - Granular Premium Tool Access Management (all 17 tools)
+// - Granular Premium Tool Access Management (all 42 tools)
 // - Telegram Bot Live Diagnostics & Notification Delivery Log
 // - Real Analytics, Conversion Metrics, Date Filters & Report Export
 // - System Audit Logs

@@ -10,6 +10,7 @@ import { useAppStore } from '@/store/app.store';
 import { auth } from '@/lib/firebase';
 import { signOut } from 'firebase/auth';
 import { apiClient } from '@/lib/api';
+import { TOOLS } from '@/registry/tools';
 
 export const Header: React.FC = () => {
   const location = useLocation();
@@ -375,7 +376,7 @@ export const Header: React.FC = () => {
                   }}
                 >
                   <Search size={16} className="text-secondary" />
-                  <span>Search 17 tools...</span>
+                  <span>Search {TOOLS.length} tools...</span>
                 </button>
 
                 <nav className="space-y-1">
@@ -391,7 +392,7 @@ export const Header: React.FC = () => {
                       }`}
                     >
                       <span>{link.label}</span>
-                      {link.hasMegaMenu && <span className="text-2xs text-muted-cv">17 tools</span>}
+                      {link.hasMegaMenu && <span className="text-2xs text-muted-cv">{TOOLS.length} tools</span>}
                     </Link>
                   ))}
                   <div className="pt-3 mt-3 border-t space-y-2" style={{ borderColor: 'var(--border)' }}>
