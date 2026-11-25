@@ -159,7 +159,7 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           # 1. Locate release APK
-          APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk/release -type f -name "*.apk" ! -name "*unsigned*" | head -n 1)
+          APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk -type f -path '*/release/*.apk' ! -name "*unsigned*" | head -n 1)
           if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ] || [ ! -s "$APK_PATH" ]; then
             echo "::error::No valid signed release APK found in build outputs directory."
             find src-tauri/gen/android/app/build/outputs/apk/ -type f || true
@@ -221,7 +221,7 @@ jobs:
 
       - name: Upload Android APK to GitHub Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           echo "Uploading $RELEASE_APK_FILE to GitHub Release $TAG_NAME..."
