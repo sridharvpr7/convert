@@ -1096,7 +1096,7 @@ const Footer: React.FC = () => {
             </p>
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-success-500 animate-pulse" />
-              <span className="text-xs text-muted-cv">All 17 tools operational · 100% Client-Side Privacy</span>
+              <span className="text-xs text-muted-cv">All {TOOLS.length} tools operational · 100% Client-Side Privacy</span>
             </div>
           </div>
 
@@ -1104,9 +1104,9 @@ const Footer: React.FC = () => {
           <div>
             <p className="text-xs font-semibold text-primary mb-3">PDF Tools</p>
             <ul className="space-y-2 text-xs text-muted-cv">
-              <li><Link to="/tool/pdf-merge" className="hover:text-primary transition-colors">Merge PDF</Link></li>
-              <li><Link to="/tool/pdf-split" className="hover:text-primary transition-colors">Split PDF</Link></li>
-              <li><Link to="/tool/pdf-rotate" className="hover:text-primary transition-colors">Rotate PDF</Link></li>
+              <li><Link to="/tool/merge-pdf" className="hover:text-primary transition-colors">Merge PDF</Link></li>
+              <li><Link to="/tool/split-pdf" className="hover:text-primary transition-colors">Split PDF</Link></li>
+              <li><Link to="/tool/rotate-pdf" className="hover:text-primary transition-colors">Rotate PDF</Link></li>
               <li><Link to="/tool/jpg-to-pdf" className="hover:text-primary transition-colors">JPG to PDF</Link></li>
             </ul>
           </div>

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Star, ArrowRight, FileText, Image, Table, Archive, Wrench } from 'lucide-react';
+import { Star, ArrowRight, FileText, Image, Table, Archive, Wrench, Code2, ShieldCheck } from 'lucide-react';
 import { useAppStore } from '@/store/app.store';
 import { getToolBySlug, CATEGORY_META } from '@/registry/tools';
 
@@ -10,6 +10,8 @@ const getCategoryIcon = (cat: string, size = 16) => {
     pdf: <FileText {...props} />,
     image: <Image {...props} />,
     data: <Table {...props} />,
+    developer: <Code2 {...props} />,
+    security: <ShieldCheck {...props} />,
     utilities: <Wrench {...props} />,
     archive: <Archive {...props} />,
   };
