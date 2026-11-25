@@ -5,6 +5,7 @@ import {
   Code2, ShieldCheck,
 } from 'lucide-react';
 import { searchTools, getPopularTools, Tool, CATEGORY_META, ToolCategory } from '@/registry/tools';
+import { getAllStudios } from '@/registry/studios';
 import { useAppStore } from '@/store/app.store';
 
 const CATEGORY_ICON_MAP: Record<ToolCategory, React.ReactNode> = {
@@ -18,12 +19,14 @@ const CATEGORY_ICON_MAP: Record<ToolCategory, React.ReactNode> = {
 };
 
 interface SearchResultItem {
-  type: 'tool' | 'category' | 'page';
+  type: 'tool' | 'category' | 'page' | 'studio';
   tool?: Tool;
   label?: string;
   description?: string;
   href?: string;
   icon?: React.ReactNode;
+  color?: string;
+  badge?: string;
 }
 
 export const CommandPalette: React.FC = () => {
@@ -40,10 +43,25 @@ export const CommandPalette: React.FC = () => {
         tool,
       }));
     }
-    return searchTools(searchQuery).slice(0, 12).map((tool) => ({
+    const q = searchQuery.toLowerCase().trim();
+    const matchedStudios = getAllStudios()
+      .filter((s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q) || s.shortName.toLowerCase().includes(q))
+      .slice(0, 3)
+      .map((s) => ({
+        type: 'studio' as const,
+        label: s.name,
+        description: s.description,
+        href: `/studios/${s.slug}`,
+        color: s.color,
+        badge: s.badge,
+      }));
+
+    const matchedTools = searchTools(searchQuery).slice(0, 10).map((tool) => ({
       type: 'tool' as const,
       tool,
     }));
+
+    return [...matchedStudios, ...matchedTools];
   }, [searchQuery]);
 
   // Focus input on open
@@ -182,6 +200,65 @@ export const CommandPalette: React.FC = () => {
           ) : (
             <ul role="listbox">
               {results.map((item, idx) => {
+                if (item.type === 'studio') {
+                  return (
+                    <li key={item.href} role="option" aria-selected={idx === selectedIndex}>
+                      <button
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-left transition-all duration-100"
+                        style={{
+                          backgroundColor:
+                            idx === selectedIndex ? 'var(--hover)' : 'transparent',
+                        }}
+                        onMouseEnter={() => setSelectedIndex(idx)}
+                        onClick={() => handleSelect(item)}
+                      >
+                        <span
+                          className="w-8 h-8 flex items-center justify-center rounded-lg flex-shrink-0 text-xs font-bold"
+                          style={{
+                            backgroundColor: `${item.color || '#3b82f6'}20`,
+                            color: item.color || '#3b82f6',
+                          }}
+                        >
+                          ST
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold text-primary">
+                              {item.label}
+                            </span>
+                            <span
+                              className="badge text-2xs flex-shrink-0"
+                              style={{
+                                backgroundColor: `${item.color || '#3b82f6'}15`,
+                                color: item.color || '#3b82f6',
+                                fontSize: '10px',
+                                padding: '1px 6px',
+                              }}
+                            >
+                              Studio
+                            </span>
+                            {item.badge && (
+                              <span className="text-2xs text-muted-cv">{item.badge}</span>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-cv truncate mt-0.5">
+                            {item.description}
+                          </p>
+                        </div>
+                        <ArrowRight
+                          size={14}
+                          style={{
+                            color:
+                              idx === selectedIndex
+                                ? 'var(--accent)'
+                                : 'var(--text-disabled)',
+                          }}
+                        />
+                      </button>
+                    </li>
+                  );
+                }
+
                 const tool = item.tool!;
                 const meta = CATEGORY_META[tool.category];
                 const isFav = isFavoriteTool(tool.slug);

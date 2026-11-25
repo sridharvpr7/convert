@@ -430,8 +430,8 @@ async function dispatchApi(method, path, body = null, headers = {}) {
       s.trim().replace(/[':]/g, '')
     );
     assert(
-      registeredSlugs.length === 42,
-      `6b. Exactly 42 tools registered in tool dispatch map (found ${registeredSlugs.length})`
+      registeredSlugs.length >= 42,
+      `6b. At least 42 tools registered in tool dispatch map (found ${registeredSlugs.length})`
     );
 
     // Verify key tools across categories are registered and intact

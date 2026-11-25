@@ -31,6 +31,8 @@ import { SettingsPage } from '@/pages/SettingsPage';
 import { AdminPage } from '@/pages/AdminPage';
 import { HelpPage } from '@/pages/HelpPage';
 import { DownloadPage } from '@/pages/DownloadPage';
+import { StudiosPage } from '@/pages/StudiosPage';
+import { StudioViewPage } from '@/pages/StudioViewPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 
 // UI Providers & Client
@@ -257,6 +259,22 @@ const AppRoutes: React.FC = () => {
           element={
             <PageWrapper>
               <HomePage />
+            </PageWrapper>
+          }
+        />
+        <Route
+          path="/studios"
+          element={
+            <PageWrapper>
+              <StudiosPage />
+            </PageWrapper>
+          }
+        />
+        <Route
+          path="/studios/:slug"
+          element={
+            <PageWrapper>
+              <StudioViewPage />
             </PageWrapper>
           }
         />

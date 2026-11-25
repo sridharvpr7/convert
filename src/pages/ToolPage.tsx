@@ -784,11 +784,17 @@ const OptionsPanel: React.FC<{
 // ────────────────────────────────────────────────
 export const ToolPage: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
-  const { isFavoriteTool, toggleFavoriteTool, addNotification, user, siteDisplayConfig } = useAppStore();
+  const { isFavoriteTool, toggleFavoriteTool, addRecentTool, addNotification, user, siteDisplayConfig } = useAppStore();
 
   const tool = slug ? getToolBySlug(slug) : undefined;
   const dispatch = slug ? getToolDispatch(slug) : null;
   const implemented = slug ? hasProcessor(slug) : false;
+
+  useEffect(() => {
+    if (tool?.slug) {
+      addRecentTool(tool.slug);
+    }
+  }, [tool?.slug, addRecentTool]);
 
   const toolSetting = slug && siteDisplayConfig?.tools ? siteDisplayConfig.tools[slug] : undefined;
   const isMaintenance = Boolean(siteDisplayConfig?.global?.maintenanceMode || toolSetting?.maintenance);
@@ -824,6 +830,11 @@ export const ToolPage: React.FC = () => {
     const defaults: Record<string, unknown> = {};
     dispatch?.optionFields?.forEach((f) => { defaults[f.key] = f.default; });
     return defaults;
+  });
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const [progressInfo, setProgressInfo] = useState<{ percent: number; message: string }>({
+    percent: 0,
+    message: '',
   });
 
   useEffect(() => {
@@ -915,7 +926,22 @@ export const ToolPage: React.FC = () => {
       return;
     }
 
-    const mergedOpts = { ...options, ...extraOpts };
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    setProgressInfo({ percent: 10, message: 'Preparing document...' });
+
+    const mergedOpts = {
+      ...options,
+      ...extraOpts,
+      signal: controller.signal,
+      onProgress: (info: { percent?: number; message?: string }) => {
+        setProgressInfo({
+          percent: typeof info.percent === 'number' ? info.percent : 50,
+          message: info.message || '',
+        });
+      },
+    };
 
     if (dispatch.multiFile) {
       const fileList = inputFiles.map((pf) => pf.file);
@@ -1163,6 +1189,9 @@ export const ToolPage: React.FC = () => {
   }, [urlInput, runProcessor]);
 
   const handleReset = () => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setProgressInfo({ percent: 0, message: '' });
     setFiles([]);
     setOverallState('idle');
     setActiveTab('upload');
@@ -1174,7 +1203,22 @@ export const ToolPage: React.FC = () => {
   const handleDeveloperProcess = useCallback(async (inputStr: string, extraOpts: Record<string, unknown> = {}): Promise<string> => {
     if (!dispatch) throw new Error('No processor available for this tool.');
     const dummyFile = new File([inputStr], `${slug || 'developer'}-input.txt`, { type: 'text/plain' });
-    const mergedOpts = { ...options, ...extraOpts };
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    setProgressInfo({ percent: 10, message: 'Preparing document...' });
+
+    const mergedOpts = {
+      ...options,
+      ...extraOpts,
+      signal: controller.signal,
+      onProgress: (info: { percent?: number; message?: string }) => {
+        setProgressInfo({
+          percent: typeof info.percent === 'number' ? info.percent : 50,
+          message: info.message || '',
+        });
+      },
+    };
     const res = await dispatch.processor([dummyFile], mergedOpts);
     const single = Array.isArray(res) ? res[0] : res;
     return await single.blob.text();
@@ -1803,7 +1847,9 @@ export const ToolPage: React.FC = () => {
                       <Loader2 size={26} className="animate-spin" />
                     </div>
                     <div>
-                      <h3 className="text-base font-semibold text-primary">Converting your files...</h3>
+                      <h3 className="text-base font-semibold text-primary">
+                        {progressInfo.message || 'Converting your files...'}
+                      </h3>
                       <p className="text-xs text-muted-cv mt-1 max-w-sm">
                         {tool.processingMode === 'local'
                           ? 'Processing directly in your browser. Your files never leave this device.'
@@ -1811,7 +1857,10 @@ export const ToolPage: React.FC = () => {
                       </p>
                     </div>
                     <div className="w-full max-w-md progress-bar">
-                      <div className="progress-fill" style={{ width: '65%', backgroundColor: meta.color }} />
+                      <div
+                        className="progress-fill transition-all duration-300"
+                        style={{ width: `${Math.max(10, Math.min(100, progressInfo.percent || 40))}%`, backgroundColor: meta.color }}
+                      />
                     </div>
                     <div className="flex items-center gap-3">
                       <p className="text-2xs text-muted-cv">Please keep this browser window open</p>

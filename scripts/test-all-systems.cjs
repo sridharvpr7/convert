@@ -50,8 +50,8 @@ async function runTests() {
   const dispatchModule = await import('../src/lib/toolDispatch.ts');
   const { hasProcessor } = dispatchModule;
 
-  test('Tool registry contains exactly 42 tools', () => {
-    assert.strictEqual(TOOLS.length, 42, `Expected 42 tools, found ${TOOLS.length}`);
+  test('Tool registry contains at least 48 tools (42 base + 6 Phase 2)', () => {
+    assert(TOOLS.length >= 48, `Expected at least 48 tools, found ${TOOLS.length}`);
   });
 
   test('Categories count is exactly 7', () => {
@@ -84,15 +84,32 @@ async function runTests() {
     'pdf-metadata-cleaner', 'pdf-security-inspector',
   ];
 
-  test('All 42 required tools are present in registry', () => {
+  const phase2Tools = [
+    'pdf-ocr', 'sign-pdf', 'fill-pdf-forms', 'reorder-pdf-pages', 'compare-pdf', 'pdf-to-images',
+  ];
+
+  test('All 42 base required tools are present in registry', () => {
     const slugs = TOOLS.map((t) => t.slug);
     for (const exp of expected42) {
       assert(slugs.includes(exp), `Missing tool slug: ${exp}`);
     }
   });
 
-  test('All 42 tools have implemented dispatch processors', () => {
+  test('All 6 Phase 2 PDF tools are present in registry', () => {
+    const slugs = TOOLS.map((t) => t.slug);
+    for (const exp of phase2Tools) {
+      assert(slugs.includes(exp), `Missing Phase 2 tool slug: ${exp}`);
+    }
+  });
+
+  test('All 42 base tools have implemented dispatch processors', () => {
     for (const exp of expected42) {
+      assert(hasProcessor(exp), `Missing processor dispatch for: ${exp}`);
+    }
+  });
+
+  test('All 6 Phase 2 PDF tools have implemented dispatch processors', () => {
+    for (const exp of phase2Tools) {
       assert(hasProcessor(exp), `Missing processor dispatch for: ${exp}`);
     }
   });

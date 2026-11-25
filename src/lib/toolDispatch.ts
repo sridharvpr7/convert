@@ -257,6 +257,132 @@ const dispatchMap: Record<string, ToolDispatch> = {
     optionsHint: 'Inspects PDF syntax, resynchronizes broken header offsets, and reconstructs damaged xref tables.',
   },
 
+  // ── PDF STUDIO PHASE 2 EXPANSIONS (6 tools) ───────────
+  'pdf-ocr': {
+    processor: async (files, opts) => (await import('./pdfStudioPhase2')).pdfOcr(files[0], opts),
+    optionFields: [
+      {
+        type: 'select',
+        key: 'lang',
+        label: 'Recognition Language',
+        options: [
+          { label: 'English (Latin script)', value: 'eng' },
+          { label: 'Tamil (தமிழ்)', value: 'tam' },
+          { label: 'English + Tamil (Multilingual)', value: 'eng+tam' },
+        ],
+        default: 'eng',
+      },
+      {
+        type: 'select',
+        key: 'outputFormat',
+        label: 'Output Format',
+        options: [
+          { label: 'Searchable PDF (Invisible OCR text layer)', value: 'searchable-pdf' },
+          { label: 'Plain Text (.txt)', value: 'text' },
+        ],
+        default: 'searchable-pdf',
+      },
+      { type: 'text', key: 'pageRange', label: 'Page Range', placeholder: 'all or e.g. 1-5', default: 'all' },
+    ],
+    optionsHint: 'Runs Tesseract.js OCR locally in your browser via PDF.js page rendering. OCR language data models may download to your browser on first use; your PDF and recognized text never leave your device.',
+  },
+
+  'sign-pdf': {
+    processor: async (files, opts) => (await import('./pdfStudioPhase2')).signPdf(files[0], opts),
+    optionFields: [
+      { type: 'text', key: 'signerName', label: 'Signer Name / Title', placeholder: 'e.g. John Doe, M.D.', default: 'Authorized Signer' },
+      {
+        type: 'select',
+        key: 'targetPage',
+        label: 'Apply Signature To',
+        options: [
+          { label: 'Last Page (Standard)', value: 'last' },
+          { label: 'First Page', value: 'first' },
+          { label: 'All Pages', value: 'all' },
+        ],
+        default: 'last',
+      },
+      {
+        type: 'select',
+        key: 'position',
+        label: 'Signature Placement',
+        options: [
+          { label: 'Bottom Right', value: 'bottom-right' },
+          { label: 'Bottom Left', value: 'bottom-left' },
+          { label: 'Top Right', value: 'top-right' },
+          { label: 'Center', value: 'center' },
+        ],
+        default: 'bottom-right',
+      },
+      { type: 'checkbox', key: 'addTimestamp', label: 'Add Date & Visual Signing Notice', default: true },
+    ],
+    optionsHint: 'Embeds a visual electronic signature and timestamp notice on target pages (not a PKI certificate-backed digital signature).',
+  },
+
+  'fill-pdf-forms': {
+    processor: async (files, opts) => (await import('./pdfStudioPhase2')).fillPdfForms(files[0], opts),
+    optionFields: [
+      { type: 'checkbox', key: 'flatten', label: 'Flatten Form (make fields permanent & non-editable)', default: true },
+    ],
+    optionsHint: 'Detects and populates interactive AcroForm fields, then locks or exports the PDF. Dynamic Adobe XFA forms are detected and reported as unsupported.',
+  },
+
+  'reorder-pdf-pages': {
+    processor: async (files, opts) => (await import('./pdfStudioPhase2')).reorderPdfPages(files[0], opts),
+    optionFields: [
+      { type: 'text', key: 'order', label: 'New Page Order (comma-separated)', placeholder: 'e.g. 3, 1, 2, 4', default: '' },
+      {
+        type: 'select',
+        key: 'rotation',
+        label: 'Rotate Pages (clockwise)',
+        options: [
+          { label: 'No rotation (0°)', value: '0' },
+          { label: '90° Clockwise', value: '90' },
+          { label: '180° Invert', value: '180' },
+          { label: '270° Counter-Clockwise', value: '270' },
+        ],
+        default: '0',
+      },
+      { type: 'text', key: 'deletePages', label: 'Delete Pages (comma-separated)', placeholder: 'e.g. 2, 5', default: '' },
+    ],
+    optionsHint: 'Reorder, rotate, duplicate, or delete specific pages with zero-page guard.',
+  },
+
+  'compare-pdf': {
+    multiFile: true,
+    processor: async (files, opts) => (await import('./pdfStudioPhase2')).comparePdf(files, opts),
+    optionsHint: 'Select two PDF documents (Original & Modified) for text and structural comparison (added, removed, and changed text, page count, and page size differences). Visual pixel-level layout comparison is not included.',
+  },
+
+  'pdf-to-images': {
+    processor: async (files, opts) => (await import('./pdfStudioPhase2')).pdfToImagesBatch(files[0], opts),
+    optionFields: [
+      {
+        type: 'select',
+        key: 'format',
+        label: 'Image Output Format',
+        options: [
+          { label: 'PNG (Lossless - Sharp text)', value: 'png' },
+          { label: 'JPEG (Compact - Smaller file size)', value: 'jpg' },
+        ],
+        default: 'png',
+      },
+      {
+        type: 'select',
+        key: 'dpi',
+        label: 'Render Resolution (DPI)',
+        options: [
+          { label: '72 DPI (Screen / Fast)', value: '72' },
+          { label: '150 DPI (Standard Print)', value: '150' },
+          { label: '300 DPI (High Resolution)', value: '300' },
+        ],
+        default: '150',
+      },
+      { type: 'text', key: 'pageRange', label: 'Page Range', placeholder: 'all or e.g. 1-3', default: 'all' },
+    ],
+    optionsHint: 'Renders genuine PDF pages (text, vectors, and images) via PDF.js to PNG/JPEG images with previews, individual downloads, and ZIP batch export.',
+  },
+
   // ── IMAGE (4 tools) ──────────────────────────────────
   'image-converter': {
     processor: async (files, opts) => {

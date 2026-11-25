@@ -101,6 +101,7 @@ export const Header: React.FC = () => {
   // Dynamic Navigation Links based on display controls
   const navLinks = [
     { label: 'Home', href: '/', show: siteDisplayConfig?.navigation?.showHome !== false },
+    { label: 'Studios', href: '/studios', show: true },
     { label: 'Tools', href: '/tools', hasMegaMenu: true, show: siteDisplayConfig?.navigation?.showTools !== false },
     { label: 'Dashboard', href: '/dashboard', show: siteDisplayConfig?.navigation?.showDashboard !== false },
     { label: 'PDF', href: '/tools/pdf', show: siteDisplayConfig?.categories?.pdf?.visible !== false },
