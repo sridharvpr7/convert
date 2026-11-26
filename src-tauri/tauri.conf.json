@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data: https://convetpulse.onrender.com; connect-src 'self' https://convetpulse.onrender.com https://*.firebaseio.com https://*.googleapis.com https://github.com https://*.githubusercontent.com; img-src 'self' blob: data: https:; font-src 'self' data: https:;"
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data: https://convetpulse.onrender.com https://*.firebaseapp.com; connect-src 'self' https://convetpulse.onrender.com https://*.firebaseio.com https://*.firebaseapp.com https://*.googleapis.com https://github.com https://*.githubusercontent.com; img-src 'self' blob: data: https:; font-src 'self' data: https:;"
     }
   },
   "plugins": {

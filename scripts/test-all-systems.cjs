@@ -50,8 +50,8 @@ async function runTests() {
   const dispatchModule = await import('../src/lib/toolDispatch.ts');
   const { hasProcessor } = dispatchModule;
 
-  test('Tool registry contains at least 48 tools (42 base + 6 Phase 2)', () => {
-    assert(TOOLS.length >= 48, `Expected at least 48 tools, found ${TOOLS.length}`);
+  test('Tool registry contains at least 58 tools (42 base + 6 Phase 2 + 10 Phase 3)', () => {
+    assert(TOOLS.length >= 58, `Expected at least 58 tools, found ${TOOLS.length}`);
   });
 
   test('Categories count is exactly 7', () => {
@@ -88,6 +88,19 @@ async function runTests() {
     'pdf-ocr', 'sign-pdf', 'fill-pdf-forms', 'reorder-pdf-pages', 'compare-pdf', 'pdf-to-images',
   ];
 
+  const phase3Tools = [
+    'docx-creator',
+    'docx-editor',
+    'markdown-editor',
+    'text-editor',
+    'html-editor',
+    'rtf-converter',
+    'docx-to-txt',
+    'markdown-to-pdf',
+    'markdown-to-docx',
+    'txt-to-docx',
+  ];
+
   test('All 42 base required tools are present in registry', () => {
     const slugs = TOOLS.map((t) => t.slug);
     for (const exp of expected42) {
@@ -102,6 +115,13 @@ async function runTests() {
     }
   });
 
+  test('All 10 Phase 3 Document tools are present in registry', () => {
+    const slugs = TOOLS.map((t) => t.slug);
+    for (const exp of phase3Tools) {
+      assert(slugs.includes(exp), `Missing Phase 3 tool slug: ${exp}`);
+    }
+  });
+
   test('All 42 base tools have implemented dispatch processors', () => {
     for (const exp of expected42) {
       assert(hasProcessor(exp), `Missing processor dispatch for: ${exp}`);
@@ -110,6 +130,12 @@ async function runTests() {
 
   test('All 6 Phase 2 PDF tools have implemented dispatch processors', () => {
     for (const exp of phase2Tools) {
+      assert(hasProcessor(exp), `Missing processor dispatch for: ${exp}`);
+    }
+  });
+
+  test('All 10 Phase 3 Document tools have implemented dispatch processors', () => {
+    for (const exp of phase3Tools) {
       assert(hasProcessor(exp), `Missing processor dispatch for: ${exp}`);
     }
   });

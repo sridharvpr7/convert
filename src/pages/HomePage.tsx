@@ -5,8 +5,12 @@ import {
   FileText, Image, Table,
   Archive, CheckCircle2, Star, ChevronRight,
   Play, Layers, RefreshCw, Lock, Boxes, WifiOff, ShieldCheck,
+  FileCheck, FileCode, AlignLeft, Code2, FileSpreadsheet,
+  FileOutput, FileType, FilePlus, BookOpen, Presentation,
+  Scissors, Mic, Video, QrCode, Clock, type LucideIcon,
 } from 'lucide-react';
-import { CATEGORY_META, getPopularTools, getNewTools, TOOLS } from '@/registry/tools';
+import { CATEGORY_META, getPopularTools, getNewTools, getLatestAddedTools, TOOLS } from '@/registry/tools';
+import { getComingSoonTools } from '@/registry/roadmap';
 import { getAllStudios } from '@/registry/studios';
 import { useAppStore } from '@/store/app.store';
 import { apiClient } from '@/lib/api';
@@ -1025,67 +1029,285 @@ const AISection: React.FC = () => {
 };
 
 // ────────────────────────────────────────────────
-// New Tools Section
+// Dynamic Tool & Roadmap Icon Resolver
 // ────────────────────────────────────────────────
-const NewToolsSection: React.FC = () => {
-  const newTools = getNewTools(6);
-  if (!newTools.length) return null;
+const TOOL_ICON_MAP: Record<string, LucideIcon> = {
+  FileText,
+  FileCheck,
+  FileCode,
+  AlignLeft,
+  Code2,
+  FileSpreadsheet,
+  FileOutput,
+  FileType,
+  FilePlus,
+  BookOpen,
+  Presentation,
+  Table,
+  Scissors,
+  Mic,
+  Video,
+  QrCode,
+  Boxes,
+  Zap,
+  Image,
+  Archive,
+  RefreshCw,
+  Sparkles,
+};
+
+const renderToolIcon = (iconName: string, size = 18): React.ReactNode => {
+  const IconComp = TOOL_ICON_MAP[iconName];
+  if (IconComp) {
+    return <IconComp size={size} />;
+  }
+  return <Zap size={size} />;
+};
+
+// ────────────────────────────────────────────────
+// Latest Added Tools Section
+// ────────────────────────────────────────────────
+const LatestAddedToolsSection: React.FC = () => {
+  const { isFavoriteTool, toggleFavoriteTool, siteDisplayConfig } = useAppStore();
+  const latestTools = getLatestAddedTools(8);
+
+  const visibleTools = latestTools.filter((tool) => {
+    if (siteDisplayConfig?.tools?.[tool.slug]?.visible === false) return false;
+    if (tool.category && siteDisplayConfig?.categories?.[tool.category]?.visible === false) return false;
+    return true;
+  });
+
+  if (visibleTools.length === 0) return null;
 
   return (
-    <section className="py-16" style={{ backgroundColor: 'var(--muted)' }}>
+    <section className="py-16 border-t" style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}>
       <div className="container-app">
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
           <div>
-            <p className="text-label mb-2">Recently Added</p>
-            <h2 className="text-2xl font-bold">New Tools</h2>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="badge text-2xs uppercase tracking-wider font-bold" style={{ backgroundColor: '#22c55e15', color: '#22c55e' }}>
+                New Capabilities
+              </span>
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-primary tracking-tight">Latest Added Tools</h2>
+            <p className="text-sm text-secondary mt-1">Discover the newest tools added to CONVET PULSE.</p>
           </div>
+          <Link
+            to="/tools"
+            className="btn-ghost btn-sm gap-1.5 self-start sm:self-auto font-semibold"
+            style={{ color: 'var(--accent)' }}
+          >
+            View All Tools
+            <ChevronRight size={14} />
+          </Link>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {newTools.map((tool) => {
-            const meta = CATEGORY_META[tool.category];
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {visibleTools.map((tool) => {
+            const meta = CATEGORY_META[tool.category] || CATEGORY_META.utilities;
+            const isFav = isFavoriteTool(tool.slug);
+
             return (
-              <Link
+              <div
                 key={tool.id}
-                to={`/tool/${tool.slug}`}
-                className="flex items-center gap-4 p-4 rounded-xl border transition-all duration-200"
+                className="group relative flex flex-col justify-between p-4 rounded-xl border transition-all duration-200"
                 style={{
                   backgroundColor: 'var(--card)',
                   borderColor: 'var(--border)',
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.borderColor = meta.color + '60';
-                  e.currentTarget.style.transform = 'translateX(4px)';
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = `0 6px 20px ${meta.color}15`;
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.borderColor = 'var(--border)';
-                  e.currentTarget.style.transform = 'translateX(0)';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = 'none';
                 }}
               >
-                <div
-                  className="w-10 h-10 flex items-center justify-center rounded-xl flex-shrink-0"
-                  style={{ backgroundColor: meta.color + '15', color: meta.color }}
-                >
-                  {getCategoryIcon(tool.category, 18)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="text-sm font-semibold text-primary">{tool.name}</span>
-                    <span
-                      className="badge text-2xs"
-                      style={{
-                        backgroundColor: meta.color + '15',
-                        color: meta.color,
-                        fontSize: '10px',
-                      }}
+                <div>
+                  {/* Top: Icon + Badges + Favorite */}
+                  <div className="flex items-start justify-between mb-3">
+                    <div
+                      className="w-10 h-10 flex items-center justify-center rounded-xl flex-shrink-0"
+                      style={{ backgroundColor: meta.color + '15', color: meta.color }}
                     >
-                      {tool.status === 'beta' ? 'Beta' : 'New'}
-                    </span>
+                      {renderToolIcon(tool.icon, 18)}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className="badge text-2xs font-semibold px-2 py-0.5"
+                        style={{
+                          backgroundColor: meta.color + '15',
+                          color: meta.color,
+                        }}
+                      >
+                        {meta.name.replace(' Tools', '')}
+                      </span>
+                      <span
+                        className="badge text-2xs font-bold px-1.5 py-0.5 bg-emerald-500/15 text-emerald-500"
+                      >
+                        New
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          toggleFavoriteTool(tool.slug);
+                        }}
+                        className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-hover-cv transition-colors"
+                        aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                      >
+                        <Star
+                          size={13}
+                          className={isFav ? 'fill-current text-warning-500' : 'text-muted-cv'}
+                        />
+                      </button>
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-cv truncate">{tool.description}</p>
+
+                  {/* Title & Description */}
+                  <h3 className="text-sm font-bold text-primary mb-1.5 group-hover:text-accent transition-colors line-clamp-1">
+                    {tool.name}
+                  </h3>
+                  <p className="text-xs text-muted-cv leading-relaxed line-clamp-2 mb-4">
+                    {tool.description}
+                  </p>
                 </div>
-                <ArrowRight size={16} style={{ color: meta.color, flexShrink: 0 }} />
-              </Link>
+
+                {/* Footer Action */}
+                <div className="flex items-center justify-between pt-3 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <div className="flex items-center gap-1.5 text-2xs text-muted-cv font-medium">
+                    {tool.offlineSupported && (
+                      <span className="inline-flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                        Offline
+                      </span>
+                    )}
+                  </div>
+                  <Link
+                    to={`/tool/${tool.slug}`}
+                    className="inline-flex items-center gap-1 text-xs font-bold transition-transform group-hover:translate-x-0.5"
+                    style={{ color: meta.color }}
+                  >
+                    Open Tool
+                    <ArrowRight size={13} />
+                  </Link>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+};
+
+// ────────────────────────────────────────────────
+// Coming Soon Section (Product Roadmap)
+// ────────────────────────────────────────────────
+const ComingSoonSection: React.FC = () => {
+  const comingSoonTools = getComingSoonTools(8);
+
+  if (comingSoonTools.length === 0) return null;
+
+  return (
+    <section className="py-16 border-t" style={{ backgroundColor: 'var(--muted)', borderColor: 'var(--border)' }}>
+      <div className="container-app">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="badge text-2xs uppercase tracking-wider font-bold" style={{ backgroundColor: 'rgba(99, 102, 241, 0.15)', color: '#6366f1' }}>
+                Roadmap Preview
+              </span>
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-primary tracking-tight">Coming Soon</h2>
+            <p className="text-sm text-secondary mt-1">Something exciting is on the way. Explore what's coming next to CONVET PULSE.</p>
+          </div>
+          <Link
+            to="/studios"
+            className="btn-ghost btn-sm gap-1.5 self-start sm:self-auto font-semibold"
+            style={{ color: 'var(--accent)' }}
+          >
+            Explore All Studios
+            <ChevronRight size={14} />
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {comingSoonTools.map((item) => {
+            const meta = CATEGORY_META[item.category] || CATEGORY_META.utilities;
+            const stageBadge =
+              item.stage === 'in-development' ? (
+                <span className="badge text-2xs font-bold px-2 py-0.5 bg-amber-500/15 text-amber-500 border border-amber-500/20">
+                  In Development
+                </span>
+              ) : item.stage === 'testing' ? (
+                <span className="badge text-2xs font-bold px-2 py-0.5 bg-emerald-500/15 text-emerald-500 border border-emerald-500/20">
+                  Testing
+                </span>
+              ) : (
+                <span className="badge text-2xs font-bold px-2 py-0.5 bg-indigo-500/15 text-indigo-500 border border-indigo-500/20">
+                  Planned
+                </span>
+              );
+
+            return (
+              <div
+                key={item.id}
+                className="relative flex flex-col justify-between p-4 rounded-xl border border-dashed transition-all duration-200"
+                style={{
+                  backgroundColor: 'var(--card)',
+                  borderColor: 'var(--border)',
+                }}
+              >
+                <div>
+                  {/* Top: Icon + Stage Badges */}
+                  <div className="flex items-start justify-between mb-3">
+                    <div
+                      className="w-10 h-10 flex items-center justify-center rounded-xl flex-shrink-0 opacity-80"
+                      style={{ backgroundColor: meta.color + '15', color: meta.color }}
+                    >
+                      {renderToolIcon(item.icon, 18)}
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <span
+                        className="badge text-2xs font-semibold px-2 py-0.5"
+                        style={{
+                          backgroundColor: 'rgba(148, 163, 184, 0.15)',
+                          color: 'var(--text-secondary)',
+                        }}
+                      >
+                        Coming Soon
+                      </span>
+                      {stageBadge}
+                    </div>
+                  </div>
+
+                  {/* Title & Studio & Description */}
+                  <div className="mb-1">
+                    <span className="text-2xs font-semibold uppercase tracking-wider text-muted-cv">
+                      {meta.name.replace(' Tools', '')}
+                    </span>
+                    <h3 className="text-sm font-bold text-primary mt-0.5 mb-1.5 line-clamp-1">
+                      {item.name}
+                    </h3>
+                  </div>
+                  <p className="text-xs text-muted-cv leading-relaxed line-clamp-2 mb-4">
+                    {item.description}
+                  </p>
+                </div>
+
+                {/* Footer Note (No fake button) */}
+                <div className="flex items-center justify-between pt-3 border-t border-dashed" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <span className="text-2xs text-muted-cv font-medium">
+                    {item.targetPhase || 'Planned Release'}
+                  </span>
+                  <span className="text-2xs font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--muted)', color: 'var(--text-secondary)' }}>
+                    Upcoming
+                  </span>
+                </div>
+              </div>
             );
           })}
         </div>
@@ -1294,6 +1516,8 @@ export const HomePage: React.FC = () => {
       {hp?.showCategories !== false && <CategoriesSection />}
       <StudiosSection />
       {hp?.showFeaturedTools !== false && <PopularToolsSection />}
+      <LatestAddedToolsSection />
+      <ComingSoonSection />
       {hp?.showHowItWorks !== false && <HowItWorksSection />}
       {hp?.showCTA !== false && <AISection />}
       {hp?.showFeatures !== false && <PrivacySection />}

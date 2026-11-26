@@ -754,6 +754,156 @@ const dispatchMap: Record<string, ToolDispatch> = {
     processor: async (files) => (await import('./processors')).extractZip(files[0]),
     optionsHint: 'The ZIP will be extracted and all files made available for download.',
   },
+
+  // ── DOCUMENT STUDIO PHASE 3 EXPANSIONS (10 tools) ───────────
+  'docx-creator': {
+    processor: async (files, opts) => (await import('./documentStudio')).processDocxCreator(files, opts),
+    optionFields: [
+      {
+        type: 'select',
+        key: 'templateId',
+        label: 'Document Template',
+        options: [
+          { label: 'Blank Document', value: 'blank' },
+          { label: 'Formal Letter', value: 'letter' },
+          { label: 'Professional Resume', value: 'resume' },
+          { label: 'Project Report', value: 'project-report' },
+          { label: 'Meeting Notes', value: 'meeting-notes' },
+          { label: 'Student Assignment', value: 'student-assignment' },
+          { label: 'Research Paper', value: 'research-paper' },
+          { label: 'Business Invoice', value: 'invoice' },
+          { label: 'Project Proposal', value: 'proposal' },
+        ],
+        default: 'letter',
+      },
+      {
+        type: 'select',
+        key: 'orientation',
+        label: 'Page Orientation',
+        options: [
+          { label: 'Portrait', value: 'portrait' },
+          { label: 'Landscape', value: 'landscape' },
+        ],
+        default: 'portrait',
+      },
+      {
+        type: 'select',
+        key: 'fontSize',
+        label: 'Font Size',
+        options: [
+          { label: '10 pt (Compact)', value: '20' },
+          { label: '11 pt (Standard Office)', value: '22' },
+          { label: '12 pt (Standard Academic)', value: '24' },
+          { label: '14 pt (Large Print)', value: '28' },
+        ],
+        default: '24',
+      },
+    ],
+    optionsHint: 'Create a clean, formatted Word (.docx) document with professional templates and typography.',
+  },
+
+  'docx-editor': {
+    processor: async (files, opts) => (await import('./documentStudio')).processDocxEditor(files, opts),
+    optionFields: [
+      {
+        type: 'select',
+        key: 'outputFormat',
+        label: 'Export Format',
+        options: [
+          { label: 'Word Document (.docx)', value: 'docx' },
+          { label: 'Plain Text (.txt)', value: 'txt' },
+          { label: 'Web Page (.html)', value: 'html' },
+        ],
+        default: 'docx',
+      },
+    ],
+    optionsHint: 'Upload a Microsoft Word (.docx) file to view, edit text, or convert to HTML/Text.',
+  },
+
+  'markdown-editor': {
+    processor: async (files, opts) => (await import('./documentStudio')).processMarkdownStudio(files, opts),
+    textPlaceholder: '# My Document\n\nWrite your markdown content here...',
+    optionFields: [
+      {
+        type: 'select',
+        key: 'exportFormat',
+        label: 'Export Format',
+        options: [
+          { label: 'Web Page (.html)', value: 'html' },
+          { label: 'PDF Document (.pdf)', value: 'pdf' },
+          { label: 'Word Document (.docx)', value: 'docx' },
+          { label: 'Markdown (.md)', value: 'md' },
+        ],
+        default: 'html',
+      },
+    ],
+    optionsHint: 'Write Markdown with real-time preview and export to HTML, PDF, or Word DOCX.',
+  },
+
+  'text-editor': {
+    processor: async (files, opts) => (await import('./documentStudio')).processTextStudio(files, opts),
+    textPlaceholder: 'Type or paste plain text here...',
+    optionFields: [
+      {
+        type: 'select',
+        key: 'exportFormat',
+        label: 'Export Format',
+        options: [
+          { label: 'Plain Text (.txt)', value: 'txt' },
+          { label: 'Word Document (.docx)', value: 'docx' },
+          { label: 'Rich Text (.rtf)', value: 'rtf' },
+        ],
+        default: 'txt',
+      },
+      { type: 'text', key: 'findText', label: 'Find Text', placeholder: 'Text to replace...', default: '' },
+      { type: 'text', key: 'replaceText', label: 'Replace With', placeholder: 'Replacement...', default: '' },
+    ],
+    optionsHint: 'Analyze word counts, perform search & replace, and export to TXT, DOCX, or RTF.',
+  },
+
+  'html-editor': {
+    processor: async (files, opts) => (await import('./documentStudio')).processHtmlStudio(files, opts),
+    textPlaceholder: '<!DOCTYPE html>\n<html>\n<head><title>Document</title></head>\n<body>\n<h1>Hello World</h1>\n<p>Content goes here...</p>\n</body>\n</html>',
+    optionFields: [
+      {
+        type: 'select',
+        key: 'exportFormat',
+        label: 'Export Format',
+        options: [
+          { label: 'HTML Document (.html)', value: 'html' },
+          { label: 'PDF Document (.pdf)', value: 'pdf' },
+          { label: 'Plain Text (.txt)', value: 'txt' },
+        ],
+        default: 'html',
+      },
+    ],
+    optionsHint: 'Edit HTML with live sandboxed preview and DOMPurify script protection.',
+  },
+
+  'rtf-converter': {
+    processor: async (files, opts) => (await import('./documentStudio')).processRtfConverter(files, opts),
+    optionsHint: 'Bidirectional conversion between Rich Text (.rtf) and Plain Text (.txt) or DOCX with Unicode escape support.',
+  },
+
+  'docx-to-txt': {
+    processor: async (files, opts) => (await import('./documentStudio')).processDocxToTxt(files, opts),
+    optionsHint: 'Extract clean, readable plain text from Word .docx documents.',
+  },
+
+  'markdown-to-pdf': {
+    processor: async (files, opts) => (await import('./documentStudio')).processMarkdownToPdf(files, opts),
+    optionsHint: 'Convert Markdown documents to clean formatted PDF files.',
+  },
+
+  'markdown-to-docx': {
+    processor: async (files, opts) => (await import('./documentStudio')).processMarkdownToDocx(files, opts),
+    optionsHint: 'Convert Markdown headings, bullet points, and text into Microsoft Word (.docx).',
+  },
+
+  'txt-to-docx': {
+    processor: async (files, opts) => (await import('./documentStudio')).processTxtToDocx(files, opts),
+    optionsHint: 'Convert plain text files into styled Microsoft Word (.docx) documents.',
+  },
 };
 
 // ─────────────────────────────────────────────────────────

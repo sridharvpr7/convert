@@ -795,4 +795,136 @@ export const apiClient = {
       return null;
     }
   },
+
+  /**
+   * Tauri Desktop Auth Bridge: Initialize Session
+   */
+  async initDesktopAuthSession(): Promise<{
+    success: boolean;
+    sessionId?: string;
+    pollToken?: string;
+    authUrl?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/desktop/init`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to initialize desktop authentication' };
+      }
+      return data;
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+    }
+  },
+
+  /**
+   * Tauri Desktop Auth Bridge: Poll for Completion
+   */
+  async pollDesktopAuthSession(
+    sessionId: string,
+    pollToken: string,
+    onStatus?: (status: string) => void,
+    signal?: AbortSignal
+  ): Promise<{
+    success: boolean;
+    idToken?: string;
+    accessToken?: string | null;
+    user?: { uid: string; email?: string; name?: string };
+    error?: string;
+  }> {
+    const maxAttempts = 200; // ~5 minutes at 1.5s interval
+    for (let i = 0; i < maxAttempts; i++) {
+      if (signal?.aborted) {
+        return { success: false, error: 'Authentication was cancelled' };
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      if (signal?.aborted) {
+        return { success: false, error: 'Authentication was cancelled' };
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/desktop/poll`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, pollToken }),
+          signal,
+        });
+
+        const data = await res.json();
+        if (data.status === 'completed' && data.idToken) {
+          return {
+            success: true,
+            idToken: data.idToken,
+            accessToken: data.accessToken,
+            user: data.user,
+          };
+        }
+
+        if (data.status === 'expired') {
+          return { success: false, error: 'Authentication session expired. Please try again.' };
+        }
+
+        if (data.status === 'forbidden') {
+          return { success: false, error: 'Invalid authentication request.' };
+        }
+
+        if (i % 4 === 0 && onStatus) {
+          onStatus('Waiting for Google Sign-In completion in your browser...');
+        }
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          return { success: false, error: 'Authentication was cancelled' };
+        }
+        // Non-fatal network hiccup during polling: keep trying
+      }
+    }
+
+    return { success: false, error: 'Authentication timed out. Please try again.' };
+  },
+
+  /**
+   * Tauri Desktop Auth Bridge: Complete Session (called by web browser)
+   */
+  async completeDesktopAuthSession(
+    sessionId: string,
+    idToken: string,
+    accessToken?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/desktop/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, idToken, accessToken }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to complete desktop authentication' };
+      }
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+    }
+  },
+
+  /**
+   * Tauri Desktop Auth Bridge: Cancel Session
+   */
+  async cancelDesktopAuth(sessionId?: string, pollToken?: string): Promise<void> {
+    if (!sessionId || !pollToken) return;
+    try {
+      await fetch(`${API_BASE}/api/auth/desktop/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, pollToken }),
+      });
+    } catch {
+      // ignore
+    }
+  },
 };

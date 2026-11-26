@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Mail, Lock, Eye, EyeOff, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, ArrowRight, CheckCircle2, RefreshCw, Monitor, X } from 'lucide-react';
 import { ConveterLogo } from '@/components/ui/Logo';
 import {
   confirmPasswordReset,
@@ -8,10 +8,13 @@ import {
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithCredential,
+  GoogleAuthProvider,
   updateProfile,
 } from 'firebase/auth';
-import { googleProvider, requireFirebaseAuth } from '@/lib/firebase';
+import { googleProvider, requireFirebaseAuth, toAppUser } from '@/lib/firebase';
 import { apiClient } from '@/lib/api';
+import { isDesktop } from '@/lib/platform';
 import { useAppStore } from '@/store/app.store';
 
 interface AuthPageProps {
@@ -27,6 +30,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
   const [name, setName] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
+  const [desktopAuthInProgress, setDesktopAuthInProgress] = useState(false);
+  const [desktopAuthStatus, setDesktopAuthStatus] = useState('');
+  const [desktopAuthAbort, setDesktopAuthAbort] = useState<AbortController | null>(null);
+  const [desktopSessionInfo, setDesktopSessionInfo] = useState<{ sessionId: string; pollToken: string } | null>(null);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const setUser = useAppStore((state) => state.setUser);
@@ -115,10 +122,97 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
     }
   };
 
+  const handleCancelDesktopAuth = () => {
+    if (desktopAuthAbort) {
+      desktopAuthAbort.abort();
+    }
+    if (desktopSessionInfo) {
+      apiClient.cancelDesktopAuth(desktopSessionInfo.sessionId, desktopSessionInfo.pollToken);
+    }
+    setDesktopAuthInProgress(false);
+    setLoading(false);
+    setDesktopAuthAbort(null);
+    setDesktopSessionInfo(null);
+  };
+
   const handleGoogleSignIn = async () => {
     setError('');
     setLoading(true);
     const redirectTarget = searchParams.get('redirect') || (searchParams.get('plan') ? `/pricing?plan=${encodeURIComponent(searchParams.get('plan') || '')}` : '/dashboard');
+
+    // ─────────────────────────────────────────────────────────
+    // Windows Desktop Tauri Authentication Flow
+    // In Tauri Windows (Edge WebView2), embedded OAuth popups are restricted
+    // and fail with auth/internal-error. We use a secure system browser bridge.
+    // ─────────────────────────────────────────────────────────
+    if (isDesktop()) {
+      setDesktopAuthInProgress(true);
+      setDesktopAuthStatus('Opening default browser for Google Sign-In...');
+
+      const abort = new AbortController();
+      setDesktopAuthAbort(abort);
+
+      try {
+        const session = await apiClient.initDesktopAuthSession();
+        if (!session.success || !session.sessionId || !session.pollToken || !session.authUrl) {
+          throw new Error(session.error || 'Failed to initialize desktop Google authentication.');
+        }
+
+        setDesktopSessionInfo({ sessionId: session.sessionId, pollToken: session.pollToken });
+
+        // Open system default browser (Chrome/Edge/Firefox)
+        const { openUrl } = await import('@tauri-apps/plugin-opener');
+        await openUrl(session.authUrl);
+
+        setDesktopAuthStatus('Waiting for Google Sign-In in your browser...');
+
+        const result = await apiClient.pollDesktopAuthSession(
+          session.sessionId,
+          session.pollToken,
+          (statusText) => setDesktopAuthStatus(statusText),
+          abort.signal
+        );
+
+        if (!result.success || !result.idToken) {
+          throw new Error(result.error || 'Google Sign-In was cancelled or timed out.');
+        }
+
+        setDesktopAuthStatus('Connecting desktop session...');
+
+        const auth = requireFirebaseAuth();
+        const credential = GoogleAuthProvider.credential(
+          result.idToken,
+          result.accessToken || undefined
+        );
+        const userCredential = await signInWithCredential(auth, credential);
+        const appUser = toAppUser(userCredential.user);
+        setUser(appUser);
+
+        apiClient.notifyLogin({
+          userId: appUser.id,
+          name: appUser.name,
+          email: appUser.email,
+          provider: 'Google (Desktop)',
+        }).then(() => {
+          sessionStorage.setItem('conveter_login_notified', String(Date.now()));
+        }).catch(() => {});
+
+        setDesktopAuthInProgress(false);
+        navigate(redirectTarget);
+      } catch (authError) {
+        setDesktopAuthInProgress(false);
+        setError(readableAuthError(authError));
+      } finally {
+        setLoading(false);
+        setDesktopAuthAbort(null);
+        setDesktopSessionInfo(null);
+      }
+      return;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Web, Android & Localhost: Standard Firebase Popup Flow
+    // ─────────────────────────────────────────────────────────
     try {
       const credential = await signInWithPopup(requireFirebaseAuth(), googleProvider);
       const appUser = {
@@ -436,6 +530,46 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
           )}
         </div>
       </div>
+
+      {/* Windows Desktop Google Auth Progress Modal */}
+      {desktopAuthInProgress && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+          <div
+            className="w-full max-w-sm rounded-2xl border p-6 text-center space-y-4 shadow-2xl relative overflow-hidden"
+            style={{
+              backgroundColor: 'var(--surface)',
+              borderColor: 'var(--border)',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7), 0 0 40px rgba(99, 102, 241, 0.2)',
+            }}
+          >
+            <div className="w-12 h-12 rounded-xl bg-accent/10 border border-accent/20 text-accent flex items-center justify-center mx-auto">
+              <RefreshCw className="w-6 h-6 animate-spin" />
+            </div>
+
+            <div>
+              <h3 className="text-base font-bold text-white flex items-center justify-center gap-2">
+                <Monitor className="w-4 h-4 text-accent" />
+                Browser Sign-In Active
+              </h3>
+              <p className="text-xs text-muted-cv mt-1.5 leading-relaxed">
+                {desktopAuthStatus || 'Opening default browser for Google Sign-In...'}
+              </p>
+            </div>
+
+            <p className="text-2xs text-white/50 leading-relaxed bg-white/[0.02] p-2.5 rounded-lg border border-white/5">
+              Please complete Google Sign-In in your browser. This desktop window will automatically detect your login and connect.
+            </p>
+
+            <button
+              type="button"
+              onClick={handleCancelDesktopAuth}
+              className="btn-secondary btn-sm w-full justify-center text-xs"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
