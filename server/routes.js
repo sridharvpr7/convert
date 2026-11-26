@@ -61,6 +61,21 @@ function setCachedRelease(data) {
   cachedReleaseExpiresAt = Date.now() + 10 * 60 * 1000;
 }
 
+// ─────────────────────────────────────────────────────────────
+// Desktop Auth Bridge Session Store (Windows Desktop Tauri)
+// Short-lived (5-minute TTL) in-memory sessions for secure browser-to-desktop OAuth
+// ─────────────────────────────────────────────────────────────
+const desktopAuthSessions = new Map();
+
+function cleanExpiredDesktopAuthSessions() {
+  const now = Date.now();
+  for (const [id, sess] of desktopAuthSessions.entries()) {
+    if (sess.expiresAt < now) {
+      desktopAuthSessions.delete(id);
+    }
+  }
+}
+
 export async function handleApiRoute(req, res, url) {
   const method = req.method;
   const pathname = url.pathname;
@@ -72,10 +87,18 @@ export async function handleApiRoute(req, res, url) {
     'http://localhost:5000',
     'http://localhost:5173',
     'http://localhost:3000',
+    'http://tauri.localhost',
+    'https://tauri.localhost',
+    'tauri://localhost',
     process.env.APP_URL,
   ].filter(Boolean);
 
-  const isAllowedOrigin = allowedOrigins.includes(reqOrigin) || (reqOrigin && reqOrigin.endsWith('.onrender.com'));
+  const isAllowedOrigin =
+    allowedOrigins.includes(reqOrigin) ||
+    (reqOrigin && reqOrigin.endsWith('.onrender.com')) ||
+    reqOrigin.startsWith('http://tauri.localhost') ||
+    reqOrigin.startsWith('https://tauri.localhost') ||
+    reqOrigin.startsWith('tauri://');
   const safeCorsOrigin = isAllowedOrigin ? reqOrigin : (allowedOrigins[0] || 'https://convetpulse.onrender.com');
 
   // JSON responder helper
@@ -841,6 +864,131 @@ export async function handleApiRoute(req, res, url) {
       email: verifiedEmail,
     });
     return sendJson(200, { ok: true, success: true, notified: Boolean(notified), deduplicated: !notified });
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // 5d. Tauri Desktop Google OAuth Bridge Endpoints
+  // Enables secure, WebView2-compatible Google sign-in via system browser
+  // ─────────────────────────────────────────────────────────
+  if (pathname === '/api/auth/desktop/init' && method === 'POST') {
+    cleanExpiredDesktopAuthSessions();
+
+    const ip = getClientIp(req);
+    const rl = checkRateLimit(`desktop-auth-init:${ip}`, 30, 60000);
+    if (!rl.allowed) return sendJson(429, { error: 'Too many requests', retryAfter: rl.retryAfter });
+
+    const sessionId = crypto.randomUUID();
+    const pollToken = crypto.randomBytes(32).toString('hex');
+    const baseUrl = (process.env.APP_URL || 'https://convetpulse.onrender.com').replace(/\/$/, '');
+
+    desktopAuthSessions.set(sessionId, {
+      sessionId,
+      pollToken,
+      status: 'pending',
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 5 * 60 * 1000, // 5 min TTL
+    });
+
+    return sendJson(200, {
+      success: true,
+      sessionId,
+      pollToken,
+      authUrl: `${baseUrl}/auth/desktop?session=${encodeURIComponent(sessionId)}`,
+    });
+  }
+
+  if (pathname === '/api/auth/desktop/poll' && method === 'POST') {
+    const body = await readBody();
+    const { sessionId, pollToken } = body || {};
+
+    if (!sessionId || !pollToken) {
+      return sendJson(400, { error: 'sessionId and pollToken are required' });
+    }
+
+    cleanExpiredDesktopAuthSessions();
+    const session = desktopAuthSessions.get(sessionId);
+
+    if (!session || session.expiresAt < Date.now()) {
+      return sendJson(200, { status: 'expired', error: 'Authentication session expired or not found' });
+    }
+
+    if (session.pollToken !== pollToken) {
+      return sendJson(403, { status: 'forbidden', error: 'Invalid poll token' });
+    }
+
+    if (session.status === 'pending') {
+      return sendJson(200, { status: 'pending' });
+    }
+
+    if (session.status === 'completed') {
+      const payload = {
+        status: 'completed',
+        success: true,
+        idToken: session.idToken,
+        accessToken: session.accessToken,
+        user: session.user,
+      };
+      // Single-use token consumption
+      desktopAuthSessions.delete(sessionId);
+      return sendJson(200, payload);
+    }
+
+    return sendJson(200, { status: session.status });
+  }
+
+  if (pathname === '/api/auth/desktop/complete' && method === 'POST') {
+    const body = await readBody();
+    const { sessionId, idToken, accessToken } = body || {};
+
+    if (!sessionId || !idToken) {
+      return sendJson(400, { error: 'sessionId and idToken are required' });
+    }
+
+    cleanExpiredDesktopAuthSessions();
+    const session = desktopAuthSessions.get(sessionId);
+
+    if (!session || session.expiresAt < Date.now()) {
+      return sendJson(400, { error: 'Authentication session expired or not found' });
+    }
+
+    if (session.status !== 'pending') {
+      return sendJson(400, { error: 'Session is not pending completion' });
+    }
+
+    // Cryptographically verify Google ID token
+    const projectId = getFirebaseProjectId();
+    let verifiedUser = { uid: 'auth-user', email: '', name: 'User' };
+
+    if (projectId) {
+      const verifyResult = await verifyFirebaseIdToken(idToken);
+      if (!verifyResult.valid) {
+        return sendJson(401, { error: 'Invalid or unverified Google authentication token' });
+      }
+      verifiedUser = {
+        uid: verifyResult.user.uid,
+        email: verifyResult.user.email || '',
+        name: verifyResult.user.name || '',
+      };
+    }
+
+    session.status = 'completed';
+    session.idToken = idToken;
+    session.accessToken = accessToken || null;
+    session.user = verifiedUser;
+
+    return sendJson(200, { success: true, ok: true });
+  }
+
+  if (pathname === '/api/auth/desktop/cancel' && method === 'POST') {
+    const body = await readBody();
+    const { sessionId, pollToken } = body || {};
+    if (sessionId && desktopAuthSessions.has(sessionId)) {
+      const session = desktopAuthSessions.get(sessionId);
+      if (session.pollToken === pollToken) {
+        desktopAuthSessions.delete(sessionId);
+      }
+    }
+    return sendJson(200, { success: true });
   }
 
   if (pathname === '/api/user/usage' && method === 'GET') {

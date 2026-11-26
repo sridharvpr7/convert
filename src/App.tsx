@@ -22,6 +22,7 @@ import { HomePage } from '@/pages/HomePage';
 import { ToolsPage } from '@/pages/ToolsPage';
 import { ToolPage } from '@/pages/ToolPage';
 import { AuthPage } from '@/pages/AuthPage';
+import { DesktopAuthCallbackPage } from '@/pages/DesktopAuthCallbackPage';
 import { PricingPage } from '@/pages/PricingPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { HistoryPage } from '@/pages/HistoryPage';
@@ -365,6 +366,14 @@ const AppRoutes: React.FC = () => {
           element={
             <PageWrapper noHeader>
               <AuthPage mode="reset" />
+            </PageWrapper>
+          }
+        />
+        <Route
+          path="/auth/desktop"
+          element={
+            <PageWrapper noHeader>
+              <DesktopAuthCallbackPage />
             </PageWrapper>
           }
         />

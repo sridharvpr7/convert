@@ -3,8 +3,8 @@
 // Defines the 12 primary studios forming the CONVET PULSE ecosystem.
 // ============================================================
 
-import type { Tool, ToolCategory } from './tools';
-import { TOOLS, getToolsByCategory } from './tools';
+import type { Tool, ToolCategory } from './tools.ts';
+import { TOOLS, getToolsByCategory } from './tools.ts';
 
 export type StudioId =
   | 'pdf-studio'
@@ -81,16 +81,31 @@ export const STUDIOS: StudioMeta[] = [
     icon: 'FileEdit',
     color: '#3b82f6',
     bgGradient: 'from-blue-500/10 via-indigo-500/5 to-transparent',
-    badge: 'Active & Expanding',
+    badge: '15 Tools Active',
     status: 'active',
-    phase: 7,
+    phase: 3,
     mappedCategories: ['pdf'],
-    specificToolSlugs: ['word-to-pdf', 'excel-to-pdf', 'powerpoint-to-pdf', 'pdf-to-excel', 'pdf-to-powerpoint'],
+    specificToolSlugs: [
+      'docx-creator',
+      'docx-editor',
+      'markdown-editor',
+      'text-editor',
+      'html-editor',
+      'rtf-converter',
+      'docx-to-txt',
+      'markdown-to-pdf',
+      'markdown-to-docx',
+      'txt-to-docx',
+      'word-to-pdf',
+      'excel-to-pdf',
+      'powerpoint-to-pdf',
+      'pdf-to-excel',
+      'pdf-to-powerpoint',
+    ],
     plannedTools: [
-      { name: 'DOCX Editor', description: 'In-browser rich text and Word document editor', phase: 'Phase 7' },
-      { name: 'XLSX Spreadsheet Editor', description: 'Interactive grid editor with basic formulas and CSV import/export', phase: 'Phase 7' },
+      { name: 'XLSX Spreadsheet Editor', description: 'Interactive grid editor with formulas and CSV import/export', phase: 'Phase 7' },
       { name: 'PPTX Presentation Editor', description: 'Slide viewer and presentation text editor', phase: 'Phase 7' },
-      { name: 'EPUB / RTF / HTML to PDF', description: 'Multi-format document conversion pipeline', phase: 'Phase 7' },
+      { name: 'EPUB to PDF Converter', description: 'E-book rendering and PDF compilation engine', phase: 'Phase 7' },
     ],
   },
   {

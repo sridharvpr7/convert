@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   Search, Bell, ChevronDown, Menu, X, LogIn, Zap, AlertTriangle, Sparkles,
+  User, RefreshCw, CheckCircle2, RotateCcw, AlertCircle
 } from 'lucide-react';
 import { ConveterLogo } from '@/components/ui/Logo';
 import { ThemeSwitcher } from '@/components/ui/ThemeSwitcher';
@@ -11,6 +12,9 @@ import { auth } from '@/lib/firebase';
 import { signOut } from 'firebase/auth';
 import { apiClient } from '@/lib/api';
 import { TOOLS } from '@/registry/tools';
+import { isTauri } from '@/lib/platform';
+import { checkForUpdate, relaunchApp, type AppUpdateInfo } from '@/lib/updater';
+import { UpdateModal } from '@/components/updater/UpdateModal';
 
 export const Header: React.FC = () => {
   const location = useLocation();
@@ -35,6 +39,72 @@ export const Header: React.FC = () => {
   const [scrolled, setScrolled] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const toolsButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Tauri updater state (Windows Desktop & Android only; inactive on web)
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<
+    'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'restart-required' | 'error'
+  >('idle');
+  const [updateErrorMessage, setUpdateErrorMessage] = useState('');
+
+  // Silent update check in background on launch (Tauri only)
+  useEffect(() => {
+    if (!isTauri()) return;
+    let isMounted = true;
+    checkForUpdate({ silent: true })
+      .then((res) => {
+        if (!isMounted) return;
+        if (res.status === 'update-available') {
+          setUpdateInfo(res.update);
+          setUpdateStatus('available');
+        }
+      })
+      .catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const handleCheckForUpdates = async () => {
+    if (!isTauri()) return;
+    if (updateStatus === 'checking' || updateStatus === 'downloading') return;
+
+    if (updateStatus === 'restart-required') {
+      await relaunchApp();
+      return;
+    }
+
+    if (updateStatus === 'available' && updateInfo) {
+      setUpdateModalOpen(true);
+      return;
+    }
+
+    setUpdateStatus('checking');
+    setUpdateErrorMessage('');
+
+    try {
+      const res = await checkForUpdate();
+      if (res.status === 'update-available') {
+        setUpdateInfo(res.update);
+        setUpdateStatus('available');
+        setUpdateModalOpen(true);
+      } else if (res.status === 'up-to-date') {
+        setUpdateStatus('up-to-date');
+        setTimeout(() => {
+          setUpdateStatus((prev) => (prev === 'up-to-date' ? 'idle' : prev));
+        }, 4000);
+      } else if (res.status === 'error') {
+        setUpdateStatus('error');
+        setUpdateErrorMessage(res.message);
+      } else {
+        setUpdateStatus('idle');
+      }
+    } catch (err) {
+      setUpdateStatus('error');
+      setUpdateErrorMessage(err instanceof Error ? err.message : 'Update check failed.');
+    }
+  };
 
   // Fetch server-side configs on mount if not already present
   useEffect(() => {
@@ -297,32 +367,144 @@ export const Header: React.FC = () => {
               </div>
 
               {/* User menu or Auth buttons */}
-              {user ? (
+              {(user || isTauri()) ? (
                 <div className="relative flex-shrink-0">
                   <button
                     onClick={() => setProfileMenuOpen((open) => !open)}
                     aria-expanded={profileMenuOpen}
-                    className="flex items-center gap-1.5 h-9 px-1.5 sm:px-2 rounded-lg transition-all duration-150 hover:bg-hover-cv"
+                    className="flex items-center gap-1.5 h-9 px-1.5 sm:px-2 rounded-lg transition-all duration-150 hover:bg-hover-cv relative"
                   >
                     <div
                       className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-semibold flex-shrink-0 overflow-hidden"
                       style={{ backgroundColor: 'var(--accent)' }}
                     >
-                      {user.avatar ? <img src={user.avatar} alt="" className="w-full h-full object-cover" /> : user.name[0]}
+                      {user?.avatar ? (
+                        <img src={user.avatar} alt="" className="w-full h-full object-cover" />
+                      ) : user?.name ? (
+                        user.name[0]
+                      ) : (
+                        <User size={13} />
+                      )}
                     </div>
+                    {/* Visual update indicator dot if update is ready */}
+                    {isTauri() && (updateStatus === 'available' || updateStatus === 'restart-required') && (
+                      <span className="absolute top-1 right-3 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-[var(--surface)] animate-pulse" />
+                    )}
                     <ChevronDown size={12} style={{ color: 'var(--text-muted)' }} />
                   </button>
                   {profileMenuOpen && (
                     <div
-                      className="absolute right-0 top-11 z-[120] w-56 rounded-xl border p-2 shadow-cv-lg"
+                      className="absolute right-0 top-11 z-[120] w-64 rounded-xl border p-2 shadow-cv-lg"
                       style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}
                     >
-                      <p className="px-3 py-2 text-xs text-muted-cv truncate">{user.email}</p>
-                      <Link onClick={() => setProfileMenuOpen(false)} to="/dashboard" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Dashboard</Link>
-                      <Link onClick={() => setProfileMenuOpen(false)} to="/history" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Conversion History</Link>
-                      <Link onClick={() => setProfileMenuOpen(false)} to="/admin" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Admin Console</Link>
-                      <Link onClick={() => setProfileMenuOpen(false)} to="/settings" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Account settings</Link>
-                      <button onClick={async () => { if (auth) await signOut(auth); setUser(null); setProfileMenuOpen(false); }} className="w-full text-left rounded-lg px-3 py-2 text-sm text-error-600 hover:bg-hover-cv">Sign out</button>
+                      {user ? (
+                        <>
+                          <p className="px-3 py-2 text-xs text-muted-cv truncate">{user.email}</p>
+                          <Link onClick={() => setProfileMenuOpen(false)} to="/dashboard" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Dashboard</Link>
+                          <Link onClick={() => setProfileMenuOpen(false)} to="/history" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Conversion History</Link>
+                          <Link onClick={() => setProfileMenuOpen(false)} to="/admin" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Admin Console</Link>
+                          <Link onClick={() => setProfileMenuOpen(false)} to="/settings" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Account settings</Link>
+                        </>
+                      ) : (
+                        <>
+                          <div className="px-3 py-1.5 text-2xs font-semibold uppercase tracking-wider text-muted-cv">
+                            CONVET PULSE Desktop
+                          </div>
+                          <Link onClick={() => setProfileMenuOpen(false)} to="/login" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Sign In</Link>
+                          <Link onClick={() => setProfileMenuOpen(false)} to="/register" className="block rounded-lg px-3 py-2 text-sm text-primary hover:bg-hover-cv">Get Started</Link>
+                        </>
+                      )}
+
+                      {/* TAURI ONLY: Check for Updates item (Strictly hidden on web) */}
+                      {isTauri() && (
+                        <div className="pt-1 mt-1 border-t" style={{ borderColor: 'var(--border)' }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleCheckForUpdates();
+                            }}
+                            disabled={updateStatus === 'checking' || updateStatus === 'downloading'}
+                            className="w-full text-left rounded-lg px-3 py-2 text-sm flex items-center justify-between transition-colors hover:bg-hover-cv disabled:opacity-60 group"
+                            title={
+                              updateStatus === 'checking'
+                                ? 'Checking for updates...'
+                                : updateStatus === 'up-to-date'
+                                ? 'Application is on latest version'
+                                : updateStatus === 'available'
+                                ? 'New update available - click to install'
+                                : updateStatus === 'downloading'
+                                ? 'Downloading update...'
+                                : updateStatus === 'restart-required'
+                                ? 'Restart required to complete update'
+                                : updateStatus === 'error'
+                                ? (updateErrorMessage || 'Update check failed - click to retry')
+                                : 'Check for application updates'
+                            }
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              {updateStatus === 'checking' && (
+                                <RefreshCw size={14} className="animate-spin text-accent shrink-0" />
+                              )}
+                              {updateStatus === 'up-to-date' && (
+                                <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />
+                              )}
+                              {updateStatus === 'available' && (
+                                <Sparkles size={14} className="text-emerald-400 shrink-0" />
+                              )}
+                              {updateStatus === 'downloading' && (
+                                <RefreshCw size={14} className="animate-spin text-accent shrink-0" />
+                              )}
+                              {updateStatus === 'restart-required' && (
+                                <RotateCcw size={14} className="text-emerald-400 shrink-0" />
+                              )}
+                              {updateStatus === 'error' && (
+                                <AlertCircle size={14} className="text-red-400 shrink-0" />
+                              )}
+                              {updateStatus === 'idle' && (
+                                <RefreshCw size={14} className="text-muted-cv shrink-0 group-hover:rotate-45 transition-transform" />
+                              )}
+
+                              <span className="truncate text-xs font-medium">
+                                {updateStatus === 'checking' && 'Checking...'}
+                                {updateStatus === 'up-to-date' && "You're up to date"}
+                                {updateStatus === 'available' && `Update v${updateInfo?.version || ''} available`}
+                                {updateStatus === 'downloading' && 'Downloading...'}
+                                {updateStatus === 'restart-required' && 'Restart required'}
+                                {updateStatus === 'error' && 'Update failed (retry)'}
+                                {updateStatus === 'idle' && 'Check for Updates'}
+                              </span>
+                            </div>
+
+                            {updateStatus === 'available' && (
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 animate-pulse ml-1" />
+                            )}
+                            {updateStatus === 'restart-required' && (
+                              <span className="text-2xs font-mono font-semibold text-emerald-400 uppercase">Apply</span>
+                            )}
+                          </button>
+
+                          {updateStatus === 'error' && updateErrorMessage && (
+                            <p className="px-3 pb-1 text-2xs text-red-400 truncate" title={updateErrorMessage}>
+                              {updateErrorMessage}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {user && (
+                        <div className="pt-1 mt-1 border-t" style={{ borderColor: 'var(--border)' }}>
+                          <button
+                            onClick={async () => {
+                              if (auth) await signOut(auth);
+                              setUser(null);
+                              setProfileMenuOpen(false);
+                            }}
+                            className="w-full text-left rounded-lg px-3 py-2 text-sm text-error-600 hover:bg-hover-cv"
+                          >
+                            Sign out
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -431,6 +613,26 @@ export const Header: React.FC = () => {
                         ⚡ Premium Features
                       </Link>
                     )}
+                    {/* TAURI ONLY: Check for Updates in Mobile Drawer */}
+                    {isTauri() && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileMenuOpen(false);
+                          handleCheckForUpdates();
+                        }}
+                        disabled={updateStatus === 'checking' || updateStatus === 'downloading'}
+                        className="w-full text-left px-4 py-3 rounded-lg text-sm font-medium text-secondary hover:bg-hover-cv flex items-center justify-between"
+                      >
+                        <span className="flex items-center gap-2">
+                          <RefreshCw size={14} className={updateStatus === 'checking' || updateStatus === 'downloading' ? 'animate-spin text-accent' : 'text-muted-cv'} />
+                          {updateStatus === 'checking' ? 'Checking for updates...' : updateStatus === 'available' ? 'Update available!' : 'Check for Updates'}
+                        </span>
+                        {updateStatus === 'available' && (
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        )}
+                      </button>
+                    )}
                     {!user && (
                       <div className="flex gap-2 pt-1">
                         <Link
@@ -459,6 +661,22 @@ export const Header: React.FC = () => {
 
       {/* Mega menu rendered outside header */}
       <MegaMenu />
+
+      {/* Tauri In-App Update Modal (Windows Desktop & Android) */}
+      {isTauri() && (
+        <UpdateModal
+          updateInfo={updateInfo}
+          isOpen={updateModalOpen}
+          onClose={() => setUpdateModalOpen(false)}
+          onUpdateStatusChange={(status) => {
+            if (status === 'restart-required') {
+              setUpdateStatus('restart-required');
+            } else if (status === 'downloading') {
+              setUpdateStatus('downloading');
+            }
+          }}
+        />
+      )}
     </>
   );
 };

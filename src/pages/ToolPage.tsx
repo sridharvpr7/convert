@@ -17,6 +17,7 @@ import { recordHistory } from '@/lib/history';
 import { DownloadCenter } from '@/components/tools/DownloadCenter';
 import { DeveloperWorkspace } from '@/components/tools/DeveloperWorkspace';
 import { BarcodeWorkspace } from '@/components/tools/BarcodeWorkspace';
+import { DocumentWorkspace } from '@/components/tools/DocumentWorkspace';
 import { apiClient } from '@/lib/api';
 import { nativeSaveFile } from '@/lib/platform';
 
@@ -1485,7 +1486,7 @@ export const ToolPage: React.FC = () => {
               </div>
             )}
 
-            {/* Developer Workspace & Barcode Workspace Special Views */}
+            {/* Developer Workspace, Barcode Workspace & Document Studio Special Views */}
             {tool.category === 'developer' ? (
               <DeveloperWorkspace
                 tool={tool}
@@ -1497,6 +1498,15 @@ export const ToolPage: React.FC = () => {
               />
             ) : tool.slug === 'barcode-generator' ? (
               <BarcodeWorkspace color={meta.color} />
+            ) : [
+                'docx-creator',
+                'docx-editor',
+                'markdown-editor',
+                'text-editor',
+                'html-editor',
+                'rtf-converter',
+              ].includes(tool.slug) ? (
+              <DocumentWorkspace tool={tool} color={meta.color} />
             ) : (
               <>
                 {/* Guided Workflow Stepper */}
