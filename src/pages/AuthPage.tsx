@@ -15,6 +15,10 @@ import {
 import { googleProvider, requireFirebaseAuth, toAppUser } from '@/lib/firebase';
 import { apiClient } from '@/lib/api';
 import { isDesktop } from '@/lib/platform';
+import {
+  loginWithGoogleDesktopPKCE,
+  cancelDesktopOAuth,
+} from '@/lib/desktopOAuth';
 import { useAppStore } from '@/store/app.store';
 
 interface AuthPageProps {
@@ -126,6 +130,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
     if (desktopAuthAbort) {
       desktopAuthAbort.abort();
     }
+    cancelDesktopOAuth().catch(() => {});
     if (desktopSessionInfo) {
       apiClient.cancelDesktopAuth(desktopSessionInfo.sessionId, desktopSessionInfo.pollToken);
     }
@@ -142,8 +147,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
 
     // ─────────────────────────────────────────────────────────
     // Windows Desktop Tauri Authentication Flow
-    // In Tauri Windows (Edge WebView2), embedded OAuth popups are restricted
-    // and fail with auth/internal-error. We use a secure system browser bridge.
+    // Direct RFC 8252 Authorization Code Flow with PKCE S256
+    // and Localhost Loopback Listener (zero reliance on external bridge).
     // ─────────────────────────────────────────────────────────
     if (isDesktop()) {
       setDesktopAuthInProgress(true);
@@ -153,39 +158,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
       setDesktopAuthAbort(abort);
 
       try {
-        const session = await apiClient.initDesktopAuthSession();
-        if (!session.success || !session.sessionId || !session.pollToken || !session.authUrl) {
-          throw new Error(session.error || 'Failed to initialize desktop Google authentication.');
-        }
-
-        setDesktopSessionInfo({ sessionId: session.sessionId, pollToken: session.pollToken });
-
-        // Open system default browser (Chrome/Edge/Firefox)
-        const { openUrl } = await import('@tauri-apps/plugin-opener');
-        await openUrl(session.authUrl);
-
-        setDesktopAuthStatus('Waiting for Google Sign-In in your browser...');
-
-        const result = await apiClient.pollDesktopAuthSession(
-          session.sessionId,
-          session.pollToken,
+        const firebaseUser = await loginWithGoogleDesktopPKCE(
           (statusText) => setDesktopAuthStatus(statusText),
           abort.signal
         );
-
-        if (!result.success || !result.idToken) {
-          throw new Error(result.error || 'Google Sign-In was cancelled or timed out.');
-        }
-
-        setDesktopAuthStatus('Connecting desktop session...');
-
-        const auth = requireFirebaseAuth();
-        const credential = GoogleAuthProvider.credential(
-          result.idToken,
-          result.accessToken || undefined
-        );
-        const userCredential = await signInWithCredential(auth, credential);
-        const appUser = toAppUser(userCredential.user);
+        const appUser = toAppUser(firebaseUser);
         setUser(appUser);
 
         apiClient.notifyLogin({
@@ -206,6 +183,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
         setLoading(false);
         setDesktopAuthAbort(null);
         setDesktopSessionInfo(null);
+        cancelDesktopOAuth().catch(() => {});
       }
       return;
     }
