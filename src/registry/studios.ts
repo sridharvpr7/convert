@@ -119,16 +119,14 @@ export const STUDIOS: StudioMeta[] = [
     icon: 'Image',
     color: '#f59e0b',
     bgGradient: 'from-amber-500/10 via-yellow-500/5 to-transparent',
-    badge: '4 Tools Active',
+    badge: '10 Tools Active',
     status: 'active',
-    phase: 7,
+    phase: 4,
     mappedCategories: ['image'],
     plannedTools: [
-      { name: 'Image Watermark', description: 'Apply text or image watermarks with opacity and positioning', phase: 'Phase 7' },
       { name: 'Sanitized SVG Converter', description: 'Convert vector SVG to raster PNG/JPG with script sanitization', phase: 'Phase 7' },
       { name: 'GIF Maker & MP4 to GIF', description: 'Create animated GIFs with custom framerate and loop controls', phase: 'Phase 7' },
       { name: 'Favicon Generator', description: 'Generate multi-resolution icons (.ico and .png)', phase: 'Phase 7' },
-      { name: 'Image Color Picker', description: 'Sample exact HEX/RGB/HSL colors from any image', phase: 'Phase 7' },
     ],
   },
   {

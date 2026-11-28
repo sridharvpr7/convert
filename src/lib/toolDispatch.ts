@@ -383,10 +383,10 @@ const dispatchMap: Record<string, ToolDispatch> = {
     optionsHint: 'Renders genuine PDF pages (text, vectors, and images) via PDF.js to PNG/JPEG images with previews, individual downloads, and ZIP batch export.',
   },
 
-  // ── IMAGE (4 tools) ──────────────────────────────────
+  // ── IMAGE & DESIGN STUDIO (Phase 4 - 10 tools) ─────────────
   'image-converter': {
     processor: async (files, opts) => {
-      const { imageConvert } = await import('./processors');
+      const { imageConvert } = await import('./imageStudio');
       const fmt = (opts.format as 'jpeg' | 'png' | 'webp') ?? 'webp';
       const q = Number(opts.quality ?? 85) / 100;
       return imageConvert(files[0], fmt, q);
@@ -405,37 +405,44 @@ const dispatchMap: Record<string, ToolDispatch> = {
       },
       { type: 'range', key: 'quality', label: 'Quality', min: 10, max: 100, step: 5, default: 85, unit: '%' },
     ],
+    optionsHint: 'Converts images between PNG, JPEG, and modern WebP formats while preserving image quality.',
   },
 
   'image-compressor': {
     processor: async (files, opts) => {
-      const { imageCompress } = await import('./processors');
+      const { imageCompress } = await import('./imageStudio');
       const q = Number(opts.quality ?? 75) / 100;
-      return imageCompress(files[0], q);
+      const maxWidth = opts.maxWidth ? Number(opts.maxWidth) : undefined;
+      return imageCompress(files[0], { quality: q, maxWidth });
     },
     optionFields: [
       { type: 'range', key: 'quality', label: 'Compression Quality', min: 10, max: 100, step: 5, default: 75, unit: '%' },
+      { type: 'number', key: 'maxWidth', label: 'Max Width (px, optional)', min: 100, max: 8000, default: 1920 },
     ],
+    optionsHint: 'Shrinks photo file size with adjustable compression quality and maximum resolution downscaling.',
   },
 
   'image-resize': {
     processor: async (files, opts) => {
-      const { imageResize } = await import('./processors');
+      const { imageResize } = await import('./imageStudio');
       const width = Number(opts.width ?? 800);
       const height = Number(opts.height ?? 600);
-      return imageResize(files[0], { width, height, maintainAspect: true });
+      const maintainAspect = opts.maintainAspect !== false;
+      return imageResize(files[0], { width, height, maintainAspect });
     },
     optionFields: [
       { type: 'number', key: 'width', label: 'Width (px)', min: 10, max: 10000, default: 800 },
       { type: 'number', key: 'height', label: 'Height (px)', min: 10, max: 10000, default: 600 },
+      { type: 'checkbox', key: 'maintainAspect', label: 'Maintain aspect ratio lock', default: true },
     ],
+    optionsHint: 'Scales picture dimensions with high-quality bicubic smoothing.',
   },
 
   'image-crop': {
     processor: async (files, opts) => {
-      const { imageCropByRatio } = await import('./processors');
-      const ratio = (opts.ratio as 'free' | '1:1' | '4:3' | '16:9') ?? '1:1';
-      return imageCropByRatio(files[0], ratio);
+      const { imageCrop } = await import('./imageStudio');
+      const ratio = (opts.ratio as 'free' | '1:1' | '4:3' | '16:9' | '3:2') ?? '1:1';
+      return imageCrop(files[0], { ratio });
     },
     optionFields: [
       {
@@ -446,10 +453,171 @@ const dispatchMap: Record<string, ToolDispatch> = {
           { label: 'Square (1:1)', value: '1:1' },
           { label: 'Standard (4:3)', value: '4:3' },
           { label: 'Widescreen (16:9)', value: '16:9' },
+          { label: 'Classic Photo (3:2)', value: '3:2' },
+          { label: 'Free / Unconstrained', value: 'free' },
         ],
         default: '1:1',
       },
     ],
+    optionsHint: 'Trims outer margins with aspect ratio constraints.',
+  },
+
+  'image-rotator-flipper': {
+    processor: async (files, opts) => {
+      const { imageRotatorFlipper } = await import('./imageStudio');
+      const rotation = Number(opts.rotation ?? 90);
+      const flip = (opts.flip as 'none' | 'horizontal' | 'vertical' | 'both') ?? 'none';
+      return imageRotatorFlipper(files[0], { rotation, flip });
+    },
+    optionFields: [
+      {
+        type: 'select',
+        key: 'rotation',
+        label: 'Rotation Angle',
+        options: [
+          { label: '0° (No rotation)', value: '0' },
+          { label: '90° Clockwise', value: '90' },
+          { label: '180° Half Turn', value: '180' },
+          { label: '270° Counter-Clockwise', value: '270' },
+        ],
+        default: '90',
+      },
+      {
+        type: 'select',
+        key: 'flip',
+        label: 'Flip / Mirror',
+        options: [
+          { label: 'None', value: 'none' },
+          { label: 'Horizontal Mirror (Left ↔ Right)', value: 'horizontal' },
+          { label: 'Vertical Flip (Top ↕ Bottom)', value: 'vertical' },
+          { label: 'Both Directions', value: 'both' },
+        ],
+        default: 'none',
+      },
+    ],
+    optionsHint: 'Rotates images by 90°, 180°, 270° and flips horizontally or vertically with alpha channel preservation.',
+  },
+
+  'image-watermark': {
+    processor: async (files, opts) => {
+      const { imageWatermark } = await import('./imageStudio');
+      const text = String(opts.text || 'CONVET PULSE');
+      const position = (opts.position as any) || 'center';
+      const opacity = Number(opts.opacity ?? 40) / 100;
+      const fontSize = Number(opts.fontSize ?? 36);
+      const color = String(opts.color || '#ffffff');
+      return imageWatermark(files[0], { text, position, opacity, fontSize, color });
+    },
+    optionFields: [
+      { type: 'text', key: 'text', label: 'Watermark Text (English or Tamil)', placeholder: 'CONVET PULSE / முத்திரை', default: 'CONVET PULSE' },
+      {
+        type: 'select',
+        key: 'position',
+        label: 'Positioning & Layout',
+        options: [
+          { label: 'Center (Diagonal Stamp)', value: 'center' },
+          { label: 'Tiled Repeating Grid', value: 'tile' },
+          { label: 'Bottom Right Corner', value: 'bottom-right' },
+          { label: 'Bottom Left Corner', value: 'bottom-left' },
+          { label: 'Top Right Corner', value: 'top-right' },
+          { label: 'Top Left Corner', value: 'top-left' },
+        ],
+        default: 'center',
+      },
+      { type: 'range', key: 'opacity', label: 'Watermark Opacity', min: 10, max: 100, step: 5, default: 40, unit: '%' },
+      { type: 'number', key: 'fontSize', label: 'Font Size (px)', min: 12, max: 120, default: 36 },
+      { type: 'text', key: 'color', label: 'Text Color (Hex)', placeholder: '#ffffff', default: '#ffffff' },
+    ],
+    optionsHint: 'Overlays copyright or custom text watermarks with full Unicode and Tamil script rendering support.',
+  },
+
+  'image-metadata-cleaner': {
+    processor: async (files, opts) => {
+      const { imageMetadataCleaner } = await import('./imageStudio');
+      const format = (opts.format as 'jpeg' | 'png' | 'webp') || undefined;
+      return imageMetadataCleaner(files[0], { format });
+    },
+    optionFields: [
+      {
+        type: 'select',
+        key: 'format',
+        label: 'Output Image Format',
+        options: [
+          { label: 'Preserve Input Format', value: 'jpeg' },
+          { label: 'PNG (Lossless Sanitized)', value: 'png' },
+          { label: 'WebP (Modern Compact Sanitized)', value: 'webp' },
+        ],
+        default: 'jpeg',
+      },
+    ],
+    optionsHint: 'Re-encodes images to permanently strip EXIF metadata, GPS coordinates, device models, and date stamps.',
+  },
+
+  'image-adjustments': {
+    processor: async (files, opts) => {
+      const { imageAdjustments } = await import('./imageStudio');
+      return imageAdjustments(files[0], {
+        brightness: Number(opts.brightness ?? 0),
+        contrast: Number(opts.contrast ?? 0),
+        saturation: Number(opts.saturation ?? 0),
+        grayscale: Number(opts.grayscale ?? 0),
+        blur: Number(opts.blur ?? 0),
+        sharpen: Boolean(opts.sharpen),
+      });
+    },
+    optionFields: [
+      { type: 'range', key: 'brightness', label: 'Brightness', min: -100, max: 100, step: 5, default: 0, unit: '%' },
+      { type: 'range', key: 'contrast', label: 'Contrast', min: -100, max: 100, step: 5, default: 0, unit: '%' },
+      { type: 'range', key: 'saturation', label: 'Saturation', min: -100, max: 100, step: 5, default: 0, unit: '%' },
+      { type: 'range', key: 'grayscale', label: 'Grayscale Filter', min: 0, max: 100, step: 10, default: 0, unit: '%' },
+      { type: 'range', key: 'blur', label: 'Gaussian Blur (px)', min: 0, max: 20, step: 1, default: 0, unit: 'px' },
+      { type: 'checkbox', key: 'sharpen', label: 'Apply 3x3 high-pass sharpen convolution filter', default: false },
+    ],
+    optionsHint: 'Fine-tunes brightness, contrast, saturation, grayscale, blur, and sharpening with genuine canvas filters.',
+  },
+
+  'image-color-picker': {
+    processor: async (files, opts) => {
+      const { imageColorPicker } = await import('./imageStudio');
+      const sampleMode = (opts.sampleMode as 'point' | '3x3' | '5x5') || 'point';
+      return imageColorPicker(files[0], { sampleMode });
+    },
+    optionFields: [
+      {
+        type: 'select',
+        key: 'sampleMode',
+        label: 'Pixel Sampling Mode',
+        options: [
+          { label: 'Single Point (Exact Pixel)', value: 'point' },
+          { label: '3×3 Average Area Box', value: '3x3' },
+          { label: '5×5 Smooth Area Box', value: '5x5' },
+        ],
+        default: 'point',
+      },
+    ],
+    optionsHint: 'Samples exact pixel colors with HEX, RGB, and HSL values. Generates a downloadable color swatch card.',
+  },
+
+  'image-palette-extractor': {
+    processor: async (files, opts) => {
+      const { imagePaletteExtractor } = await import('./imageStudio');
+      const count = Number(opts.count ?? 6);
+      return imagePaletteExtractor(files[0], { count });
+    },
+    optionFields: [
+      {
+        type: 'select',
+        key: 'count',
+        label: 'Number of Dominant Colors',
+        options: [
+          { label: '4 Dominant Colors', value: '4' },
+          { label: '6 Dominant Colors (Recommended)', value: '6' },
+          { label: '8 Dominant Colors', value: '8' },
+        ],
+        default: '6',
+      },
+    ],
+    optionsHint: 'Extracts dominant representative colors and generates a high-resolution color palette card (.png).',
   },
 
   // ── DATA & SPREADSHEETS (4 tools) ─────────────────────

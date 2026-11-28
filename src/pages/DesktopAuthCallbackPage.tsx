@@ -78,7 +78,7 @@ export const DesktopAuthCallbackPage: React.FC = () => {
 
   return (
     <div
-      className="min-h-screen flex items-center justify-center p-4"
+      className="min-h-screen flex items-center justify-center p-4 pt-16 sm:pt-4"
       style={{ backgroundColor: 'var(--bg)' }}
     >
       <div

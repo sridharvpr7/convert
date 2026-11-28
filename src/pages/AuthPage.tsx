@@ -15,6 +15,11 @@ import {
 import { googleProvider, requireFirebaseAuth, toAppUser } from '@/lib/firebase';
 import { apiClient } from '@/lib/api';
 import { isDesktop } from '@/lib/platform';
+import {
+  loginWithGoogleDesktopPKCE,
+  getGoogleDesktopClientId,
+  cancelDesktopOAuth,
+} from '@/lib/desktopOAuth';
 import { useAppStore } from '@/store/app.store';
 
 interface AuthPageProps {
@@ -126,6 +131,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
     if (desktopAuthAbort) {
       desktopAuthAbort.abort();
     }
+    cancelDesktopOAuth().catch(() => {});
     if (desktopSessionInfo) {
       apiClient.cancelDesktopAuth(desktopSessionInfo.sessionId, desktopSessionInfo.pollToken);
     }
@@ -142,8 +148,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
 
     // ─────────────────────────────────────────────────────────
     // Windows Desktop Tauri Authentication Flow
-    // In Tauri Windows (Edge WebView2), embedded OAuth popups are restricted
-    // and fail with auth/internal-error. We use a secure system browser bridge.
+    // In Tauri Windows (Edge WebView2), embedded OAuth popups fail with
+    // "Failed to fetch" due to WebView2 origin CORS restrictions.
+    // We authenticate via external browser using OAuth 2.0 PKCE with
+    // localhost loopback callback (or secure server-assisted bridge).
     // ─────────────────────────────────────────────────────────
     if (isDesktop()) {
       setDesktopAuthInProgress(true);
@@ -153,39 +161,55 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
       setDesktopAuthAbort(abort);
 
       try {
-        const session = await apiClient.initDesktopAuthSession();
-        if (!session.success || !session.sessionId || !session.pollToken || !session.authUrl) {
-          throw new Error(session.error || 'Failed to initialize desktop Google authentication.');
+        const desktopClientId = getGoogleDesktopClientId();
+        let appUser;
+
+        if (desktopClientId) {
+          // Direct Authorization Code Flow with PKCE S256 & Localhost Loopback Listener (RFC 8252)
+          const firebaseUser = await loginWithGoogleDesktopPKCE(
+            (statusText) => setDesktopAuthStatus(statusText),
+            abort.signal
+          );
+          appUser = toAppUser(firebaseUser);
+        } else {
+          // Server-assisted bridge session fallback
+          const session = await apiClient.initDesktopAuthSession();
+          if (!session.success || !session.sessionId || !session.pollToken || !session.authUrl) {
+            throw new Error(
+              session.error ||
+              'Desktop Google Sign-In requires configuring a Google Desktop Client ID (VITE_GOOGLE_DESKTOP_CLIENT_ID).'
+            );
+          }
+
+          setDesktopSessionInfo({ sessionId: session.sessionId, pollToken: session.pollToken });
+
+          const { openUrl } = await import('@tauri-apps/plugin-opener');
+          await openUrl(session.authUrl);
+
+          setDesktopAuthStatus('Waiting for Google Sign-In in your browser...');
+
+          const result = await apiClient.pollDesktopAuthSession(
+            session.sessionId,
+            session.pollToken,
+            (statusText) => setDesktopAuthStatus(statusText),
+            abort.signal
+          );
+
+          if (!result.success || !result.idToken) {
+            throw new Error(result.error || 'Google Sign-In was cancelled or timed out.');
+          }
+
+          setDesktopAuthStatus('Connecting desktop session...');
+
+          const auth = requireFirebaseAuth();
+          const credential = GoogleAuthProvider.credential(
+            result.idToken,
+            result.accessToken || undefined
+          );
+          const userCredential = await signInWithCredential(auth, credential);
+          appUser = toAppUser(userCredential.user);
         }
 
-        setDesktopSessionInfo({ sessionId: session.sessionId, pollToken: session.pollToken });
-
-        // Open system default browser (Chrome/Edge/Firefox)
-        const { openUrl } = await import('@tauri-apps/plugin-opener');
-        await openUrl(session.authUrl);
-
-        setDesktopAuthStatus('Waiting for Google Sign-In in your browser...');
-
-        const result = await apiClient.pollDesktopAuthSession(
-          session.sessionId,
-          session.pollToken,
-          (statusText) => setDesktopAuthStatus(statusText),
-          abort.signal
-        );
-
-        if (!result.success || !result.idToken) {
-          throw new Error(result.error || 'Google Sign-In was cancelled or timed out.');
-        }
-
-        setDesktopAuthStatus('Connecting desktop session...');
-
-        const auth = requireFirebaseAuth();
-        const credential = GoogleAuthProvider.credential(
-          result.idToken,
-          result.accessToken || undefined
-        );
-        const userCredential = await signInWithCredential(auth, credential);
-        const appUser = toAppUser(userCredential.user);
         setUser(appUser);
 
         apiClient.notifyLogin({
@@ -206,6 +230,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
         setLoading(false);
         setDesktopAuthAbort(null);
         setDesktopSessionInfo(null);
+        cancelDesktopOAuth().catch(() => {});
       }
       return;
     }
@@ -261,7 +286,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
     >
       {/* Left: branding panel */}
       <div
-        className="hidden lg:flex flex-col justify-between p-12 w-[420px] flex-shrink-0"
+        className="hidden lg:flex flex-col justify-between p-12 pt-20 w-[420px] flex-shrink-0"
         style={{ backgroundColor: 'var(--surface)', borderRight: '1px solid var(--border)' }}
       >
         <Link to="/">
@@ -300,7 +325,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ mode }) => {
       </div>
 
       {/* Right: form panel */}
-      <div className="flex-1 flex items-center justify-center p-6">
+      <div className="flex-1 flex items-center justify-center p-6 pt-16 sm:p-6">
         <div className="w-full max-w-md">
           {/* Mobile logo */}
           <div className="flex justify-center mb-8 lg:hidden">

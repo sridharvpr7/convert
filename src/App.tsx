@@ -16,6 +16,7 @@ import { auth, toAppUser } from '@/lib/firebase';
 // Layout
 import { Header } from '@/components/navigation/Header';
 import { CommandPalette } from '@/components/navigation/CommandPalette';
+import { GlobalBackButton } from '@/components/navigation/GlobalBackButton';
 
 // Pages
 import { HomePage } from '@/pages/HomePage';
@@ -104,11 +105,22 @@ const PageWrapper: React.FC<{ children: React.ReactNode; noHeader?: boolean }> =
   noHeader = false,
 }) => {
   return (
-    <div className="page-enter min-h-screen" style={{ backgroundColor: 'var(--bg)' }}>
+    <div className="page-enter min-h-screen relative" style={{ backgroundColor: 'var(--bg)' }}>
       <a href="#main-content" className="skip-to-content">
         Skip to main content
       </a>
       {!noHeader && <Header />}
+      {noHeader && (
+        <div
+          className="fixed z-40"
+          style={{
+            top: 'calc(1rem + env(safe-area-inset-top, 0px))',
+            left: 'calc(1rem + env(safe-area-inset-left, 0px))',
+          }}
+        >
+          <GlobalBackButton />
+        </div>
+      )}
       <main id="main-content" tabIndex={-1} className="outline-none">
         {children}
       </main>

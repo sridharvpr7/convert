@@ -175,6 +175,18 @@ async function run() {
     assert(threw, 'Should have thrown ProcessorError on corrupted buffer');
   });
 
+  await test('Extracts DOCX from ArrayBuffer and Blob without requiring Node-only Buffer input', async () => {
+    // Verify ArrayBuffer input
+    const { text, html } = await extractDocxContent(sampleDocxBuffer);
+    assert(text.includes('CONVET PULSE'), 'ArrayBuffer extraction must contain document body');
+    assert(html.length > 0, 'ArrayBuffer extraction must generate HTML');
+
+    // Verify browser Blob input
+    const blob = new Blob([sampleDocxBuffer], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const blobResult = await extractDocxContent(blob);
+    assert(blobResult.text.includes('CONVET PULSE'), 'Blob extraction must contain document body');
+  });
+
   // ─────────────────────────────────────────────────────────
   // SECTION 3: Markdown Studio & Sanitization Engine
   // ─────────────────────────────────────────────────────────
@@ -218,6 +230,16 @@ async function run() {
     const page = pdfDoc.getPage(0);
     const { width, height } = page.getSize();
     assert(width > 500 && height > 800, 'Page must have standard A4 dimensions (595x842)');
+  });
+
+  await test('Converts Markdown with Tamil Unicode to PDF using embedded font', async () => {
+    const tamilMd = `# தமிழ் ஆவணம்\n\nCONVET PULSE Tamil Document.\n\nவணக்கம் உலகம்! வாழ்க தமிழ் மொழி.`;
+    const pdfBlob = await markdownToPdf(tamilMd, { title: 'தமிழ் அறிக்கை' });
+    assert(pdfBlob instanceof Blob, 'Result must be a Blob');
+    assert(pdfBlob.size > 1000, `PDF size must be substantial (embedded font): ${pdfBlob.size} bytes`);
+    const pdfBuffer = await pdfBlob.arrayBuffer();
+    const pdfDoc = await PDFDocument.load(pdfBuffer);
+    assert.strictEqual(pdfDoc.getPageCount(), 1, 'PDF should have 1 page');
   });
 
   await test('Converts Markdown to DOCX OpenXML binary', async () => {
@@ -304,6 +326,13 @@ async function run() {
     assert(plain.includes('Hello World!'), 'Extracted text missing Hello World!');
     assert(plain.includes('Second paragraph.'), 'Extracted text missing Second paragraph.');
     assert(!plain.includes('\\rtf1'), 'RTF control words leaked into plain text');
+  });
+
+  await test('Round-trips RTF with non-BMP characters (emojis), Tamil, and special braces', () => {
+    const complexText = 'Rocket 🚀 Launch & Star ⭐\nTamil: வணக்கம் உலகம்\nBraces: {group} and \\slashes\\';
+    const rtf = textToRtf(complexText, 'Complex RTF');
+    const recovered = rtfToText(rtf);
+    assert.strictEqual(recovered, complexText, 'RTF round-trip failed to preserve complex Unicode/symbols');
   });
 
   // ─────────────────────────────────────────────────────────

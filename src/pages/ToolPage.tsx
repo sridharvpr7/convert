@@ -18,6 +18,7 @@ import { DownloadCenter } from '@/components/tools/DownloadCenter';
 import { DeveloperWorkspace } from '@/components/tools/DeveloperWorkspace';
 import { BarcodeWorkspace } from '@/components/tools/BarcodeWorkspace';
 import { DocumentWorkspace } from '@/components/tools/DocumentWorkspace';
+import { ImageWorkspace } from '@/components/tools/ImageWorkspace';
 import { apiClient } from '@/lib/api';
 import { nativeSaveFile } from '@/lib/platform';
 
@@ -1507,6 +1508,11 @@ export const ToolPage: React.FC = () => {
                 'rtf-converter',
               ].includes(tool.slug) ? (
               <DocumentWorkspace tool={tool} color={meta.color} />
+            ) : [
+                'image-color-picker',
+                'image-palette-extractor',
+              ].includes(tool.slug) ? (
+              <ImageWorkspace tool={tool} color={meta.color} />
             ) : (
               <>
                 {/* Guided Workflow Stepper */}

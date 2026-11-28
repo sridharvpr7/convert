@@ -24,8 +24,40 @@ import mammoth from 'mammoth';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import * as fontkit from 'fontkit';
+import JSZip from 'jszip';
 import type { ProcessorResult } from './processors.ts';
 import { ProcessorError, toBlobPart } from './processors.ts';
+
+// ─────────────────────────────────────────────────────────
+// Helper: Load Unicode Tamil Font (NotoSansTamil-Regular.ttf)
+// ─────────────────────────────────────────────────────────
+async function loadTamilUnicodeFontBytes(): Promise<Uint8Array> {
+  if (typeof window !== 'undefined' && typeof fetch === 'function') {
+    const resp = await fetch('/fonts/NotoSansTamil-Regular.ttf');
+    if (!resp.ok) {
+      throw new ProcessorError(
+        `Failed to load Unicode Tamil font (/fonts/NotoSansTamil-Regular.ttf, HTTP ${resp.status}). Cannot embed Tamil text layer without dropping characters.`,
+        'FONT_LOAD_ERROR'
+      );
+    }
+    return new Uint8Array(await resp.arrayBuffer());
+  }
+
+  // Node.js environment
+  try {
+    const fsMod = await import(/* @vite-ignore */ 'node:fs');
+    const pathMod = await import(/* @vite-ignore */ 'node:path');
+    const fontPath = pathMod.resolve(process.cwd(), 'public/fonts/NotoSansTamil-Regular.ttf');
+    const buf = fsMod.readFileSync(fontPath);
+    return new Uint8Array(buf);
+  } catch (err) {
+    throw new ProcessorError(
+      `Failed to load Unicode Tamil font from public/fonts/NotoSansTamil-Regular.ttf: ${(err as Error).message}`,
+      'FONT_LOAD_ERROR'
+    );
+  }
+}
 
 // ─────────────────────────────────────────────────────────
 // Document Templates
@@ -391,17 +423,18 @@ export function sanitizeHtml(rawHtml: string): string {
         'a', 'span', 'div', 'img',
       ],
       ALLOWED_ATTR: ['href', 'title', 'alt', 'src', 'class', 'style', 'width', 'height', 'target'],
+      FORBID_TAGS: ['script', 'style', 'iframe', 'frame', 'object', 'embed', 'applet', 'base', 'link', 'meta', 'svg', 'math', 'form', 'input', 'button'],
+      FORBID_ATTR: ['on*', 'onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'formaction', 'action'],
+      ALLOW_DATA_ATTR: false,
     });
   }
 
   // Headless / Node.js fallback sanitizer
   let safe = rawHtml
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
-    .replace(/<object[\s\S]*?<\/object>/gi, '')
-    .replace(/<embed[\s\S]*?<\/embed>/gi, '')
-    .replace(/on\w+\s*=\s*(["'][^"']*["']|[^\s>]+)/gi, '')
-    .replace(/javascript:/gi, 'blocked:');
+    .replace(/<(?:script|style|iframe|frame|object|embed|applet|base|link|meta|svg|math|form)[\s\S]*?<\/(?:script|style|iframe|frame|object|embed|applet|base|link|meta|svg|math|form)>/gi, '')
+    .replace(/<(?:script|style|iframe|frame|object|embed|applet|base|link|meta|svg|math|form)[^>]*\/?>/gi, '')
+    .replace(/\son\w+\s*=\s*(["'][^"']*["']|[^\s>]+)/gi, '')
+    .replace(/(?:javascript|vbscript|data):/gi, 'blocked:');
   return safe;
 }
 
@@ -550,25 +583,31 @@ export interface DocxExtractionResult {
 }
 
 export async function extractDocxContent(
-  file: File | Blob | ArrayBuffer | Uint8Array | Buffer
+  file: File | Blob | ArrayBuffer | Uint8Array | unknown
 ): Promise<DocxExtractionResult> {
-  let rawBuffer: Buffer;
-  if (Buffer.isBuffer(file)) {
-    rawBuffer = file;
+  let arrayBuffer: ArrayBuffer;
+
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(file)) {
+    arrayBuffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
   } else if (file instanceof ArrayBuffer) {
-    rawBuffer = Buffer.from(file);
+    arrayBuffer = file;
   } else if (ArrayBuffer.isView(file)) {
-    rawBuffer = Buffer.from(file.buffer, file.byteOffset, file.byteLength);
+    arrayBuffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
   } else if (file && typeof (file as Blob).arrayBuffer === 'function') {
-    const ab = await (file as Blob).arrayBuffer();
-    rawBuffer = Buffer.from(ab);
+    arrayBuffer = await (file as Blob).arrayBuffer();
   } else {
     throw new ProcessorError('Invalid input provided to Word parser.', 'INVALID_INPUT');
   }
 
+  // Mammoth in browser requires { arrayBuffer }; Mammoth in Node requires { buffer }
+  const mammothOptions: { arrayBuffer: ArrayBuffer; buffer: any } = {
+    arrayBuffer,
+    buffer: typeof Buffer !== 'undefined' ? Buffer.from(arrayBuffer) : arrayBuffer,
+  };
+
   try {
-    const rawTextResult = await mammoth.extractRawText({ buffer: rawBuffer });
-    const htmlResult = await mammoth.convertToHtml({ buffer: rawBuffer });
+    const rawTextResult = await mammoth.extractRawText(mammothOptions);
+    const htmlResult = await mammoth.convertToHtml(mammothOptions);
 
     const messages = [
       ...(rawTextResult.messages || []).map((m) => m.message),
@@ -581,6 +620,31 @@ export async function extractDocxContent(
       messages: Array.from(new Set(messages)),
     };
   } catch (err) {
+    // Browser fallback: If Mammoth fails (e.g. Node-only globals or missing features), parse OpenXML ZIP directly
+    try {
+      const zip = await JSZip.loadAsync(arrayBuffer);
+      const docFile = zip.file('word/document.xml');
+      if (docFile) {
+        const xml = await docFile.async('string');
+        const paragraphs = xml.match(/<w:p[\s\S]*?<\/w:p>/g) || [];
+        const extractedLines: string[] = [];
+        for (const p of paragraphs) {
+          const textRuns = p.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g) || [];
+          const line = textRuns.map((t) => t.replace(/<w:t[^>]*>/, '').replace(/<\/w:t>/, '')).join('');
+          if (line) extractedLines.push(line);
+        }
+        const rawText = extractedLines.join('\n').trim();
+        const safeHtml = extractedLines.map((line) => `<p>${line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`).join('');
+        return {
+          text: rawText,
+          html: safeHtml,
+          messages: ['Extracted via client-side OpenXML parser fallback.'],
+        };
+      }
+    } catch {
+      // Fall through to primary error
+    }
+
     throw new ProcessorError(
       `Could not parse Word document: ${(err as Error)?.message || 'Invalid or corrupted DOCX file.'}`,
       'INVALID_DOCX'
@@ -611,6 +675,24 @@ export async function markdownToPdf(
   options: { title?: string } = {}
 ): Promise<Blob> {
   const pdfDoc = await PDFDocument.create();
+
+  // Check if content or title has non-Latin/Unicode characters (e.g. Tamil)
+  const fullRawText = (options.title || '') + '\n' + (markdown || '');
+  const needsUnicode = /[^\x00-\xFF]/.test(fullRawText);
+
+  let tamilFont: Awaited<ReturnType<PDFDocument['embedFont']>> | null = null;
+  if (needsUnicode) {
+    try {
+      pdfDoc.registerFontkit(fontkit);
+      const tamilBytes = await loadTamilUnicodeFontBytes();
+      tamilFont = await pdfDoc.embedFont(tamilBytes, {
+        features: { calt: false, liga: false, clig: false, dlig: false },
+      });
+    } catch (fontErr) {
+      console.warn('[DocumentStudio] Could not embed Tamil Unicode font, falling back to standard fonts:', fontErr);
+    }
+  }
+
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
@@ -631,12 +713,14 @@ export async function markdownToPdf(
 
   // Render title
   const title = options.title || 'Document';
-  checkPageBreak(30);
+  checkPageBreak(36);
+  const titleNeedsUnicode = /[^\x00-\xFF]/.test(title);
+  const titleFont = (titleNeedsUnicode && tamilFont) ? tamilFont : boldFont;
   currentPage.drawText(title, {
     x: margin,
     y: currentY - 20,
     size: 20,
-    font: boldFont,
+    font: titleFont,
     color: rgb(0.1, 0.2, 0.4),
   });
   currentY -= 40;
@@ -651,22 +735,28 @@ export async function markdownToPdf(
     }
 
     if (line.startsWith('# ')) {
+      const headingText = line.replace(/^#\s+/, '');
+      const hNeedsUnicode = /[^\x00-\xFF]/.test(headingText);
+      const hFont = (hNeedsUnicode && tamilFont) ? tamilFont : boldFont;
       checkPageBreak(28);
-      currentPage.drawText(line.replace(/^#\s+/, ''), {
+      currentPage.drawText(headingText, {
         x: margin,
         y: currentY - 16,
         size: 16,
-        font: boldFont,
+        font: hFont,
         color: rgb(0.1, 0.1, 0.2),
       });
       currentY -= 28;
     } else if (line.startsWith('## ')) {
+      const headingText = line.replace(/^##\s+/, '');
+      const hNeedsUnicode = /[^\x00-\xFF]/.test(headingText);
+      const hFont = (hNeedsUnicode && tamilFont) ? tamilFont : boldFont;
       checkPageBreak(24);
-      currentPage.drawText(line.replace(/^##\s+/, ''), {
+      currentPage.drawText(headingText, {
         x: margin,
         y: currentY - 14,
         size: 14,
-        font: boldFont,
+        font: hFont,
         color: rgb(0.2, 0.2, 0.3),
       });
       currentY -= 24;
@@ -676,16 +766,27 @@ export async function markdownToPdf(
       let currentLineText = '';
 
       for (const word of words) {
+        if (!word) continue;
         const testLine = currentLineText ? `${currentLineText} ${word}` : word;
-        const width = font.widthOfTextAtSize(testLine, 10);
+        const testNeedsUnicode = /[^\x00-\xFF]/.test(testLine);
+        const testFont = (testNeedsUnicode && tamilFont) ? tamilFont : font;
+
+        let width = 0;
+        try {
+          width = testFont.widthOfTextAtSize(testLine, 10);
+        } catch {
+          width = testLine.length * 6;
+        }
 
         if (width > contentWidth && currentLineText) {
           checkPageBreak(14);
+          const drawNeedsUnicode = /[^\x00-\xFF]/.test(currentLineText);
+          const drawFont = (drawNeedsUnicode && tamilFont) ? tamilFont : font;
           currentPage.drawText(currentLineText, {
             x: margin,
             y: currentY - 10,
             size: 10,
-            font,
+            font: drawFont,
             color: rgb(0.15, 0.15, 0.15),
           });
           currentY -= 14;
@@ -697,11 +798,13 @@ export async function markdownToPdf(
 
       if (currentLineText) {
         checkPageBreak(14);
+        const drawNeedsUnicode = /[^\x00-\xFF]/.test(currentLineText);
+        const drawFont = (drawNeedsUnicode && tamilFont) ? tamilFont : font;
         currentPage.drawText(currentLineText, {
           x: margin,
           y: currentY - 10,
           size: 10,
-          font,
+          font: drawFont,
           color: rgb(0.15, 0.15, 0.15),
         });
         currentY -= 16;
@@ -716,6 +819,44 @@ export async function markdownToPdf(
 // ─────────────────────────────────────────────────────────
 // 4. RTF Codec (Rich Text Format with Full Unicode / Tamil)
 // ─────────────────────────────────────────────────────────
+function stripRtfControlGroups(rtf: string): string {
+  const ignoredPrefixes = ['\\fonttbl', '\\colortbl', '\\stylesheet', '\\info', '\\*', '\\pict', '\\header', '\\footer'];
+  let result = '';
+  let i = 0;
+  const len = rtf.length;
+
+  while (i < len) {
+    if (rtf[i] === '{') {
+      let isIgnored = false;
+      const sub = rtf.slice(i + 1, i + 30).trimStart();
+      for (const prefix of ignoredPrefixes) {
+        if (sub.startsWith(prefix)) {
+          isIgnored = true;
+          break;
+        }
+      }
+
+      if (isIgnored) {
+        let depth = 1;
+        i++;
+        while (i < len && depth > 0) {
+          if (rtf[i] === '\\') {
+            i += 2;
+            continue;
+          }
+          if (rtf[i] === '{') depth++;
+          else if (rtf[i] === '}') depth--;
+          i++;
+        }
+        continue;
+      }
+    }
+    result += rtf[i];
+    i++;
+  }
+  return result;
+}
+
 export function textToRtf(text: string, title = 'Document'): string {
   let rtf = `{\\rtf1\\ansi\\ansicpg1252\\deff0\\nouicompat\\deflang1033{\\fonttbl{\\f0\\fnil\\fcharset0 Arial;}{\\f1\\fnil\\fcharset0 Times New Roman;}}\n`;
   rtf += `{\\colortbl ;\\red0\\green0\\blue0;\\red30\\green70\\blue150;}\n`;
@@ -729,6 +870,10 @@ export function textToRtf(text: string, title = 'Document'): string {
 
     if (char === '\n') {
       rtf += '\\par\n';
+    } else if (char === '\r') {
+      // ignore bare CR
+    } else if (char === '\t') {
+      rtf += '\\tab ';
     } else if (char === '\\') {
       rtf += '\\\\';
     } else if (char === '{') {
@@ -738,7 +883,7 @@ export function textToRtf(text: string, title = 'Document'): string {
     } else if (code < 128) {
       rtf += char;
     } else {
-      // RTF Unicode escape representation: \uN?
+      // RTF Unicode escape representation: \uN? (Signed 16-bit integer)
       const signedCode = code > 32767 ? code - 65536 : code;
       rtf += `\\u${signedCode}?`;
     }
@@ -753,14 +898,16 @@ export function rtfToText(rtfString: string): string {
     return rtfString || '';
   }
 
-  let text = rtfString;
+  let text = stripRtfControlGroups(rtfString);
 
-  // Remove control headers like font tables, color tables, stylesheet, info
-  text = text.replace(/\{\\\*[\s\S]*?\}/g, '');
-  text = text.replace(/\{\\(?:fonttbl|colortbl|stylesheet|info)[\s\S]*?\}/g, '');
+  // Preserve escaped backslashes, braces before stripping control words
+  text = text
+    .replace(/\\\\/g, '\x00BS\x00')
+    .replace(/\\\{/g, '\x00OB\x00')
+    .replace(/\\\}/g, '\x00CB\x00');
 
-  // Convert Unicode escapes: \uN? or \uN
-  text = text.replace(/\\u(-?\d+)[^\\{}]?/g, (_, numStr) => {
+  // Convert Unicode escapes: \uN? or \uN (with optional fallback char)
+  text = text.replace(/\\u(-?\d+)\??/g, (_, numStr) => {
     let code = parseInt(numStr, 10);
     if (code < 0) code += 65536;
     return String.fromCharCode(code);
@@ -769,18 +916,29 @@ export function rtfToText(rtfString: string): string {
   // Paragraph and line breaks
   text = text.replace(/\\(?:par|line)\b/g, '\n');
   text = text.replace(/\\tab\b/g, '\t');
+  text = text.replace(/\\~\b/g, ' ');
 
-  // Strip remaining control words
+  // Strip remaining control words: \word-123 followed by optional space
   text = text.replace(/\\[a-zA-Z]+-?\d*\s?/g, '');
 
-  // Strip unescaped grouping braces
-  text = text.replace(/([^\\]|^)[{}]/g, '$1');
+  // Strip non-par newlines
+  text = text.replace(/\r/g, '');
 
-  // Unescape literal braces and backslashes
+  // Strip unescaped grouping braces
+  let prev;
+  do {
+    prev = text;
+    text = text.replace(/(^|[^\x00])[{}](?!\x00)/g, '$1');
+  } while (text !== prev);
+
+  // Restore preserved characters
   text = text
-    .replace(/\\\{/g, '{')
-    .replace(/\\\}/g, '}')
-    .replace(/\\\\/g, '\\');
+    .replace(/\x00BS\x00/g, '\\')
+    .replace(/\x00OB\x00/g, '{')
+    .replace(/\x00CB\x00/g, '}');
+
+  // Collapse consecutive newlines created by \par\n
+  text = text.replace(/\n\n+/g, '\n');
 
   return text.trim();
 }

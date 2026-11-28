@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { ConveterLogo } from '@/components/ui/Logo';
 import { ThemeSwitcher } from '@/components/ui/ThemeSwitcher';
+import { GlobalBackButton } from '@/components/navigation/GlobalBackButton';
 import { MegaMenu } from './MegaMenu';
 import { useAppStore } from '@/store/app.store';
 import { auth } from '@/lib/firebase';
@@ -239,10 +240,13 @@ export const Header: React.FC = () => {
               paddingRight: 'max(0.75rem, env(safe-area-inset-right, 0px))',
             }}
           >
-            {/* Logo */}
-            <Link to="/" className="flex-shrink-0 flex items-center gap-2 group outline-none" aria-label="CONVET PULSE Home">
-              <ConveterLogo size={28} showText />
-            </Link>
+            {/* Top-left: Global Back Button (on applicable pages) & Brand Logo */}
+            <div className="flex items-center gap-2 sm:gap-2.5 flex-shrink-0">
+              <GlobalBackButton />
+              <Link to="/" className="flex-shrink-0 flex items-center gap-2 group outline-none" aria-label="CONVET PULSE Home">
+                <ConveterLogo size={28} showText />
+              </Link>
+            </div>
 
             {/* Desktop Navigation */}
             <nav className="hidden lg:flex items-center gap-0.5 flex-1 mx-4">

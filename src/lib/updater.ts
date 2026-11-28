@@ -55,7 +55,7 @@ export async function checkForUpdate(options: { silent?: boolean } = {}): Promis
   // ── Android Mobile App Update Check ───────────────────────
   if (isAndroid()) {
     try {
-      const currentVersion = '1.0.1';
+      const currentVersion = '1.0.2';
       let latestVersion = '';
       let releaseBody = '';
       const releaseUrl = 'https://github.com/sridharvpr7/convert/releases/latest';
@@ -139,7 +139,7 @@ export async function checkForUpdate(options: { silent?: boolean } = {}): Promis
 
       return {
         status: 'up-to-date',
-        currentVersion: update?.currentVersion || '1.0.1',
+        currentVersion: update?.currentVersion || '1.0.2',
       };
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);

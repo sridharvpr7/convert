@@ -32,8 +32,8 @@ function test(name, fn) {
 console.log('\x1b[1m\x1b[36m=== Testing Latest Added Tools & Coming Soon Roadmap ===\x1b[0m\n');
 
 // 1. Tool registry integrity
-test('Total registered tools is exactly 58', () => {
-  assert.strictEqual(TOOLS.length, 58, `Expected 58 tools, got ${TOOLS.length}`);
+test('Total registered tools is exactly 64 (58 base + 6 Phase 4)', () => {
+  assert.strictEqual(TOOLS.length, 64, `Expected 64 tools, got ${TOOLS.length}`);
 });
 
 test('Total registered studios is exactly 12', () => {

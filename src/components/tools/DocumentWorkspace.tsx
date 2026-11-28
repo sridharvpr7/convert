@@ -517,7 +517,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({ tool, colo
             <iframe
               title="Document Preview"
               srcDoc={`<!DOCTYPE html><html><head><style>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: #1e293b; padding: 28px; max-width: 760px; margin: 0 auto; word-wrap: break-word; } h1,h2,h3 { color: #0f172a; margin-top: 1.4em; } hr { border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0; } blockquote { border-left: 4px solid #3b82f6; padding-left: 16px; color: #64748b; margin: 16px 0; } code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; } pre { background: #0f172a; color: #f8fafc; padding: 14px; border-radius: 8px; overflow-x: auto; } table { border-collapse: collapse; width: 100%; margin: 16px 0; } th, td { border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left; } th { background: #f8fafc; }</style></head><body>${previewHtml}</body></html>`}
-              sandbox="allow-same-origin"
+              sandbox=""
               className="w-full flex-1 border-0"
             />
           </div>
@@ -606,6 +606,14 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({ tool, colo
             RTF
           </button>
         </div>
+      </div>
+
+      {/* ── Document Formatting Compatibility Notice ──────────── */}
+      <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-500/5 border border-slate-500/10 text-2xs text-muted-cv">
+        <HelpCircle size={13} className="text-muted-cv flex-shrink-0" />
+        <span>
+          <strong>Formatting Support:</strong> Headings, paragraphs, bold, italics, underline, lists, tables, and UTF-8/Unicode (including Tamil). Complex Word elements (VBA macros, embedded ActiveX/OLE objects, SmartArt, and password protection) are omitted for client-side security and cross-platform compatibility.
+        </span>
       </div>
 
       {/* ── Templates Modal ────────────────────────────────────── */}
